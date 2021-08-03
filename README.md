@@ -1,22 +1,13 @@
-<style>
-    img.picture {
-        width: 45%;
-        display:block;
-        margin-left:auto;
-        margin-right:auto;
-        border-radius: 255px 15px 225px 15px/15px 225px 15px 255px;
-        padding:1em 0em 0em 0em;
-        border:dashed 2px rgb(128, 128, 128);
-        box-shadow: 0 14px 28px rgba(0,0,0,0.25), 0 10px 10px rgba(0,0,0,0.22)
-    }
-    p { color: #505050; }
-</style>
-
 # AxamlMapControl #
+![GitHub](https://img.shields.io/github/license/beskot/Map)
+![GitHub repo size](https://img.shields.io/github/repo-size/beskot/Map)
 
 A multi-platform data driven map control library for .Net.
-<img class="picture" src="/AxamlMapControlSample/Assets/Example_1.png"/>
 
+<div align="center" >
+    <img src="/AxamlMapControlSample/Assets/Example_1.png" width="400" height="400" style=“margin-right: 10px;”/>
+</div>
+   
 ### Usage ###
 
 To use the library, add the following to your `App.xaml`:
