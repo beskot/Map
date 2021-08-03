@@ -1,0 +1,92 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:AxamlMapControlSample.ViewModels"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:map="using:AxamlMapControl.Source"
+        xmlns:cache="using:AxamlMapControl.Source.Cache"
+        xmlns:shape="using:AxamlMapControl.Source.Shapes"
+        mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="450"
+        x:Class="AxamlMapControlSample.Views.MainWindow"
+        Icon="/Assets/avalonia-logo.ico"
+        Title="AxamlMapControlSample"
+        Width="1000"
+        Height="1000">
+
+    <Design.DataContext>
+        <vm:MainWindowViewModel/>
+    </Design.DataContext>
+
+    <Grid>
+        <Border BorderBrush="Transparent">
+            <map:Map Background="#FFFEFEFE" MinZoomLevel="0" MaxZoomLevel="15" ZoomLevel="4" Center="15, 15">
+                <map:Map.Resources>
+                    <SolidColorBrush x:Key="ColorDefault" Color="#F7E0Aa"/>
+                    <SolidColorBrush x:Key="ColorSelected" Color="#E4707a"/>
+                    <SolidColorBrush x:Key="ColorBorder" Color="#404040"/>
+                </map:Map.Resources>
+                <map:Map.TileLayer>
+                    <map:MapTileLayer>
+                        <map:MapTileLayer.TileSource>
+                            <map:TileSource UriStringFormat="https://tile.osm.ch/switzerland/{z}/{x}/{y}.png"/>
+                        </map:MapTileLayer.TileSource>
+                        <!-- Use sqlite cache -->
+                        <!-- <map:MapTileLayer.TileImageLoader>
+                            <cache:TileImageSqliteCache DataSource="D:\osm_swiss_style.db"/>
+                        </map:MapTileLayer.TileImageLoader> -->
+                    </map:MapTileLayer>
+                </map:Map.TileLayer>
+                <map:MapGraticule/>
+                <map:MapLocationLayer>
+                    <shape:MapLine StartPoint="14,10" EndPoint="10,-1" Stroke="#F145Aa" StrokeThickness="3"/>
+                    <shape:MapPolygon Locations="20,0 20,10 30,10 30,0"
+                        Stroke="{DynamicResource ColorBorder}" StrokeThickness="1" StrokeDashArray="3,2" Fill="#20A93144"/>
+                    <shape:MapPolyline Locations="30,11 30,20 20,20 25,11"
+                        Stroke="{DynamicResource ColorBorder}" StrokeThickness="4"/>
+                    <shape:MapPath map:MapLocationLayer.Location="34.9229, 33.6233"
+                        VerticalAlignment="Center" HorizontalAlignment="Center">
+                        <shape:MapPath.Fill>
+                           <RadialGradientBrush>
+                                <RadialGradientBrush.GradientStops>
+                                    <GradientStop Color="#F1252525" Offset="0"/>
+                                    <GradientStop Color="#40C1C280" Offset="1"/>
+                                </RadialGradientBrush.GradientStops>
+                        </RadialGradientBrush>
+                        </shape:MapPath.Fill>
+                        <shape:MapPath.Data>
+                            <EllipseGeometry RadiusX="7000" RadiusY="7000"/>
+                        </shape:MapPath.Data>
+                    </shape:MapPath>
+                </map:MapLocationLayer>
+
+                <map:MapItemsControl Items="{Binding Objects}" SelectionMode="Multiple">
+                    <map:MapItemsControl.Styles>
+                        <Style Selector="map|MapItem">
+                            <Setter Property="map:MapLocationLayer.Location" Value="{Binding Position}"/>
+                            <Setter Property="VerticalAlignment" Value="Center"/>
+                            <Setter Property="HorizontalAlignment" Value="Center"/>
+                            <Setter Property="ZIndex" Value="1"/>
+                            <Setter Property="Background" Value="{DynamicResource ColorDefault}"/>
+                            <Setter Property="Padding" Value="0"/>
+                            <Setter Property="Template">
+                                <ControlTemplate>
+                                    <Ellipse Fill="{TemplateBinding Background}"/>
+                                </ControlTemplate>
+                            </Setter>
+                        </Style>
+                        <Style Selector="map|MapItem > Ellipse">
+                            <Setter Property="Width" Value="14"/>
+                            <Setter Property="Height" Value="14"/>
+                            <Setter Property="StrokeThickness" Value="2"/>
+                            <Setter Property="Stroke" Value="{DynamicResource ColorBorder}"/>
+                        </Style>
+                        <Style Selector="map|MapItem:selected /template/ Ellipse">
+                            <Setter Property="Fill" Value="{DynamicResource ColorSelected}"/>
+                            <Setter Property="ZIndex" Value="10"/>                
+                        </Style>
+                    </map:MapItemsControl.Styles>
+                </map:MapItemsControl>
+            </map:Map>
+        </Border>
+    </Grid>
+</Window>

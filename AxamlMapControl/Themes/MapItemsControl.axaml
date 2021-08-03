@@ -1,0 +1,18 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:AxamlMapControl.Source">
+        
+  <Style Selector="local|MapItemsControl">
+    <Setter Property="Template">
+        <ControlTemplate>                                      
+            <ItemsPresenter Name="PART_ItemsPresenter"
+                Items="{TemplateBinding Items}"
+                ItemsPanel="{TemplateBinding ItemsPanel}"
+                ItemTemplate="{TemplateBinding ItemTemplate}"
+                Margin="{TemplateBinding Padding}"
+                VirtualizationMode="{TemplateBinding VirtualizationMode}"/>                            
+        </ControlTemplate>
+    </Setter>
+  </Style>
+  
+</Styles>

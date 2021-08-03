@@ -1,0 +1,9 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:AxamlMapControl.Source">
+
+  <StyleInclude Source="avares://AxamlMapControl/Themes/MapGraticule.axaml"/>
+  <StyleInclude Source="avares://AxamlMapControl/Themes/MapItemsControl.axaml"/>
+  <StyleInclude Source="avares://AxamlMapControl/Themes/MapItem.axaml"/>
+
+</Styles>
