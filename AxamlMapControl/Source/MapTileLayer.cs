@@ -33,6 +33,9 @@ namespace AxamlMapControl.Source
         public const int TileSize = 256;
         private MapTileMatrix _currentTileMatrix = MapTileMatrix.Empty;
         private List<Tile> _tileList = new();
+        // Array keys use reference equality: repeated world copies share one bitmap.
+        private readonly Dictionary<byte[], Bitmap> _images = new();
+        private readonly HashSet<byte[]> _failedImages = new();
         private AvaloniaObject? _observedSource;
         private long _generation;
 
@@ -53,6 +56,7 @@ namespace AxamlMapControl.Source
                 _generation++;
                 _tileList = new List<Tile>();
                 _currentTileMatrix = MapTileMatrix.Empty;
+                ClearImages();
                 InvalidateVisual();
             };
         }
@@ -75,17 +79,55 @@ namespace AxamlMapControl.Source
             _generation++;
             _tileList = new List<Tile>();
             _currentTileMatrix = MapTileMatrix.Empty;
+            ClearImages();
             ObserveSource(MapParent is null ? null : TileSource as AvaloniaObject);
             InvalidateVisual();
             if (MapParent is { } map && !map.Bounds.IsEmpty) OnViewChanged(map.ZoomLevel);
+        }
+
+        private void ClearImages()
+        {
+            foreach (var image in _images.Values) image.Dispose();
+            _images.Clear();
+            _failedImages.Clear();
+        }
+
+        // Called only from UI updates, never from Render or a loader worker.
+        private void SynchronizeImages()
+        {
+            var visible = new HashSet<byte[]>(_tileList
+                .Where(tile => tile.ImageData is { Length: > 0 })
+                .Select(tile => tile.ImageData!));
+            foreach (var data in _images.Keys.Where(data => !visible.Contains(data)).ToList())
+            {
+                _images[data].Dispose();
+                _images.Remove(data);
+            }
+            _failedImages.IntersectWith(visible);
+            foreach (var data in visible)
+            {
+                if (_images.ContainsKey(data) || _failedImages.Contains(data)) continue;
+                try
+                {
+                    using var stream = new MemoryStream(data, writable: false);
+                    var image = new Bitmap(stream);
+                    try { _images.Add(data, image); }
+                    catch { image.Dispose(); throw; }
+                }
+                catch (Exception ex)
+                {
+                    _failedImages.Add(data);
+                    Trace.TraceError("Tile image decoding failed: {0}", ex);
+                }
+            }
         }
 
         public override void Render(DrawingContext context)
         {
             foreach (var tile in _tileList)
             {
-                if (tile.ImageData is null) continue;
-                context.DrawImage(new Bitmap(new MemoryStream(tile.ImageData)),
+                if (tile.ImageData is not { } data || !_images.TryGetValue(data, out var image)) continue;
+                context.DrawImage(image,
                     new Rect((tile.XIndex - _currentTileMatrix.Xmin) * TileSize,
                         (tile.Y - _currentTileMatrix.Ymin) * TileSize, TileSize, TileSize));
             }
@@ -123,6 +165,7 @@ namespace AxamlMapControl.Source
                 _currentTileMatrix = matrix;
                 _tileList = next;
                 _generation++;
+                SynchronizeImages();
             }
 
             RenderTransform = new MatrixTransform(Matrix.CreateTranslation(
@@ -130,7 +173,10 @@ namespace AxamlMapControl.Source
             InvalidateVisual();
             if (!changed || source is null || loader is null) return;
             if (source is TileSource && string.IsNullOrWhiteSpace(source.UriStringFormat)) return;
-            var pending = _tileList.Where(tile => tile.ImageData is null).ToList();
+            // Workers receive separate objects; visible tile data is published on the UI thread.
+            var pending = _tileList.Where(tile => tile.ImageData is null)
+                .Select(tile => new Tile(tile.Zoom, tile.X, tile.Y) { XIndex = tile.XIndex })
+                .ToList();
             if (pending.Count == 0) return;
             var snapshot = new ResolvedSource(source, pending);
             _ = LoadTilesAsync(loader, snapshot, pending, _generation);
@@ -144,7 +190,22 @@ namespace AxamlMapControl.Source
                 await loader.TileLoadAsync(tiles, source).ConfigureAwait(false);
                 Dispatcher.UIThread.Post(() =>
                 {
-                    if (generation == _generation && MapParent is { }) InvalidateVisual();
+                    if (generation != _generation || MapParent is null) return;
+                    try
+                    {
+                        var loaded = new Dictionary<Tile, byte[]>();
+                        foreach (var tile in tiles)
+                            if (tile.ImageData is { Length: > 0 } data) loaded[tile] = data;
+                        foreach (var tile in _tileList)
+                            if (tile.ImageData is null && loaded.TryGetValue(tile, out var data))
+                                tile.ImageData = data;
+                        SynchronizeImages();
+                        InvalidateVisual();
+                    }
+                    catch (Exception ex)
+                    {
+                        Trace.TraceError("Publishing tile images failed: {0}", ex);
+                    }
                 });
             }
             catch (Exception ex)
