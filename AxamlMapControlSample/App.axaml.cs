@@ -6,12 +6,9 @@ using AxamlMapControlSample.Views;
 
 namespace AxamlMapControlSample
 {
-    public class App : Application
+    public partial class App : Application
     {
-        public override void Initialize()
-        {
-            AvaloniaXamlLoader.Load(this);
-        }
+        public override void Initialize() => AvaloniaXamlLoader.Load(this);
 
         public override void OnFrameworkInitializationCompleted()
         {
@@ -19,10 +16,9 @@ namespace AxamlMapControlSample
             {
                 desktop.MainWindow = new MainWindow
                 {
-                    DataContext = new MainWindowViewModel(),
+                    DataContext = new MainWindowViewModel()
                 };
             }
-
             base.OnFrameworkInitializationCompleted();
         }
     }
