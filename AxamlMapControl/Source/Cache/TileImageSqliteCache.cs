@@ -2,89 +2,93 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Avalonia;
 
 namespace AxamlMapControl.Source.Cache
 {
-    /// <summary>
-    /// TileLoader caching in the sqlite.
-    /// </summary>
+    /// <summary>SQLite cache using full tile URIs and operation-scoped connections.</summary>
     public class TileImageSqliteCache : AvaloniaObject, ITileImageLoader, IDisposable
     {
-        private TileContext _db;
-        private object _dbLocker = new();
+        public static readonly StyledProperty<string> DataSourceProperty =
+            AvaloniaProperty.Register<TileImageSqliteCache, string>(nameof(DataSource), string.Empty);
 
-        public ITileImageLoader TileImageLoader { get; private set; }
-
-        public static readonly StyledProperty<string> DataSourceProperty
-            = AvaloniaProperty.Register<TileImageSqliteCache, string>(nameof(DataSource), string.Empty);
+        private string _dataSource = TileContext.DefaultDataSource;
+        private int _disposed;
+        public ITileImageLoader TileImageLoader { get; }
 
         public string DataSource
         {
-            get => GetValue(DataSourceProperty);
-            set => SetValue(DataSourceProperty, value);
-        }
-
-        public TileImageSqliteCache()
-        {
-            _db = new();
-            TileImageLoader = new TileImageLoader();
-            DataSourceProperty.Changed.AddClassHandler<TileImageSqliteCache>((_, e) => DataSourceChanged(e));
-        }
-
-        private void DataSourceChanged(AvaloniaPropertyChangedEventArgs e)
-        {
-            if (e.NewValue is string fileName)
+            get => Volatile.Read(ref _dataSource);
+            set
             {
-                _db = File.Exists(fileName) ? new(fileName) : new();
+                ThrowIfDisposed();
+                SetValue(DataSourceProperty, value);
             }
         }
 
-        private Tile? TileFind(Tile tile)
+        static TileImageSqliteCache()
         {
-            lock (_dbLocker)
+            DataSourceProperty.Changed.AddClassHandler<TileImageSqliteCache>((cache, e) =>
             {
-                return _db.Tiles.Find(tile.Zoom, tile.X, tile.Y);
-            }
+                var path = e.NewValue is string value && !string.IsNullOrWhiteSpace(value)
+                    ? Path.GetFullPath(value) : TileContext.DefaultDataSource;
+                Volatile.Write(ref cache._dataSource, path);
+            });
         }
 
-        private void WriteData(Tile tile)
+        public TileImageSqliteCache() : this(new TileImageLoader()) { }
+
+        // The supplied loader remains owned by the caller.
+        public TileImageSqliteCache(ITileImageLoader tileImageLoader)
         {
-            lock (_dbLocker)
-            {
-                if (TileFind(tile) is null)
-                {
-                    _db.Tiles.Add(tile);
-                    _db.SaveChangesAsync();
-                }
-            }
+            TileImageLoader = tileImageLoader ?? throw new ArgumentNullException(nameof(tileImageLoader));
         }
 
-        public void Dispose()
+        private void ThrowIfDisposed()
         {
-            _db.Dispose();
+            if (Volatile.Read(ref _disposed) != 0)
+                throw new ObjectDisposedException(nameof(TileImageSqliteCache));
         }
 
-        public async Task TileLoadAsync(IEnumerable<Tile> tiles, ITileSource source)
+        public Task TileLoadAsync(IEnumerable<Tile> tiles, ITileSource source) =>
+            TileLoadAsync(tiles, source, CancellationToken.None);
+
+        public async Task TileLoadAsync(IEnumerable<Tile> tiles, ITileSource source,
+            CancellationToken cancellationToken)
         {
-            foreach (var tile in tiles)
+            ThrowIfDisposed();
+            if (tiles is null) throw new ArgumentNullException(nameof(tiles));
+            if (source is null) throw new ArgumentNullException(nameof(source));
+            cancellationToken.ThrowIfCancellationRequested();
+            var store = new SqliteTileStore(DataSource);
+            var requests = tiles.Select(tile =>
+                (Tile: tile, Key: source.GetUri(tile).ToString())).ToList();
+            var cached = await store.ReadAsync(requests.Select(request => request.Key), cancellationToken)
+                .ConfigureAwait(false);
+            foreach (var request in requests)
             {
-                tile.ImageData = TileFind(tile)?.ImageData;
+                cancellationToken.ThrowIfCancellationRequested();
+                if (cached.TryGetValue(request.Key, out var data)) request.Tile.ImageData = data;
             }
 
-            if (tiles.Where(p => p.ImageData is null) is { } list && list.Any())
+            var missing = requests.Where(request => request.Tile.ImageData is null).ToList();
+            if (missing.Count == 0) return;
+            await TileImageLoader.TileLoadAsync(
+                missing.Select(request => request.Tile).ToList(), source, cancellationToken)
+                .ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            var images = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+            foreach (var request in missing)
             {
-                list = list.ToList();
-                await TileImageLoader.TileLoadAsync(list, source);
-                await Task.Run(() =>
-                {
-                    foreach (var item in list)
-                    {
-                        WriteData(item);
-                    }
-                });
+                cancellationToken.ThrowIfCancellationRequested();
+                if (request.Tile.ImageData is { Length: > 0 } data) images[request.Key] = data;
             }
+            await store.WriteAsync(images, cancellationToken).ConfigureAwait(false);
         }
+
+        // No connection is retained. Already-started operations finish with their own token.
+        public void Dispose() => Interlocked.Exchange(ref _disposed, 1);
     }
 }
