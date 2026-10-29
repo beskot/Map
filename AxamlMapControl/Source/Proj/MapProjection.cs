@@ -3,80 +3,54 @@ using Avalonia;
 
 namespace AxamlMapControl.Source.Proj
 {
-    /// <summary>
-    /// Spherical Mercator Projection, EPSG:3857.
-    /// </summary>
+    /// <summary>Spherical Mercator projection for a square raster-tile world.</summary>
     public class MapProjection : IMapProjection
     {
-        /// <summary>
-        /// Radius of Earth (m)
-        /// </summary>
         public const double Wgs84EquatorialRadius = 6378137;
-
-        /// <summary>
-        /// Mert in degree
-        /// </summary>
         public const double Wgs84MetersPerDegree = Wgs84EquatorialRadius * Math.PI / 180;
+        public const double OriginShift = Math.PI * Wgs84EquatorialRadius;
 
-        /// <summary>
-        /// Offset from origin
-        /// </summary>
-        public const double OriginShift = Math.PI * MapProjection.Wgs84EquatorialRadius;
+        /// <summary>Latitude at the square world's vertical edge: atan(sinh(pi)).</summary>
+        public static readonly double MaxLatitude = Math.Atan(Math.Sinh(Math.PI)) * 180d / Math.PI;
+        public static readonly double MinLatitude = -MaxLatitude;
 
-        /// <summary>
-        /// Get relative scale.
-        /// </summary>
-        /// <param name="location">Location</param>
-        /// <returns>Scale</returns>
+        private static void ValidateLocation(Location location)
+        {
+            if (location is null) throw new ArgumentNullException(nameof(location));
+            if (!double.IsFinite(location.Latitude) || !double.IsFinite(location.Longitude))
+                throw new ArgumentOutOfRangeException(nameof(location),
+                    "Latitude and longitude must be finite.");
+        }
+
         public Vector GetRelativeScale(Location location)
         {
-            var k = 1d / Math.Cos(location.Latitude * Math.PI / 180d);
-
-            return new Vector(k, k);
+            ValidateLocation(location);
+            var latitude = Math.Clamp(location.Latitude, MinLatitude, MaxLatitude);
+            var scale = 1d / Math.Cos(latitude * Math.PI / 180d);
+            return new Vector(scale, scale);
         }
 
-        /// <summary>
-        /// Get location from cartesian coordinate.
-        /// </summary>
-        /// <param name="point">Cartesian coordinate</param>
-        /// <returns>Location</returns>
         public Location ToLocation(Point point)
         {
-            return new Location(
-                YToLatitude(point.Y / Wgs84MetersPerDegree),
-                point.X / Wgs84MetersPerDegree);
+            if (!double.IsFinite(point.X) || !double.IsFinite(point.Y))
+                throw new ArgumentOutOfRangeException(nameof(point),
+                    "Projected coordinates must be finite.");
+            var y = Math.Clamp(point.Y, -OriginShift, OriginShift);
+            var latitude = Math.Atan(Math.Sinh(y / Wgs84EquatorialRadius)) * 180d / Math.PI;
+            // Preserve unwrapped longitude for horizontal world repetition.
+            return new Location(latitude, point.X / Wgs84MetersPerDegree);
         }
 
-        /// <summary>
-        /// Get cartesian coordinate from location.
-        /// </summary>
-        /// <param name="location">Location</param>
-        /// <returns>Cartesian coordinate</returns>
         public Point ToCartesian(Location location)
         {
-           return new Point(
-                Wgs84MetersPerDegree * location.Longitude,
-                Wgs84MetersPerDegree * LatitudeToY(location.Latitude));
-        }
-
-        private double LatitudeToY(double latitude)
-        {
-            if (latitude <= Location.MinLatitude)
-            {
-                return double.NegativeInfinity;
-            }
-
-            if (latitude >= Location.MaxLatitude)
-            {
-                return double.PositiveInfinity;
-            }
-
-            return Math.Log(Math.Tan((latitude + 90d) * Math.PI / 360d)) * 180d / Math.PI;
-        }
-
-        private double YToLatitude(double y)
-        {
-            return 90d - Math.Atan(Math.Exp(-y * Math.PI / 180d)) * 360d / Math.PI;
+            ValidateLocation(location);
+            var latitude = Math.Clamp(location.Latitude, MinLatitude, MaxLatitude);
+            var x = Wgs84MetersPerDegree * location.Longitude;
+            if (!double.IsFinite(x))
+                throw new ArgumentOutOfRangeException(nameof(location),
+                    "Longitude exceeds the supported projected coordinate range.");
+            var y = Wgs84EquatorialRadius * Math.Asinh(Math.Tan(latitude * Math.PI / 180d));
+            return new Point(x, Math.Clamp(y, -OriginShift, OriginShift));
         }
     }
 }
