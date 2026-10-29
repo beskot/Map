@@ -1,16 +1,15 @@
 using Avalonia;
 using Avalonia.Controls;
-using Avalonia.Controls.Metadata;
-using Avalonia.Controls.Mixins;
+using AxamlMapControl.Source.Proj;
 
 namespace AxamlMapControl.Source
 {
     public class MapItem : ListBoxItem
     {
-        public static readonly StyledProperty<Location> LocationProperty
-            = AvaloniaProperty.Register<MapItem, Location>(nameof(Location));
+        public static readonly StyledProperty<Location?> LocationProperty =
+            AvaloniaProperty.Register<MapItem, Location?>(nameof(Location));
 
-        public Location Location
+        public Location? Location
         {
             get => GetValue(LocationProperty);
             set => SetValue(LocationProperty, value);
@@ -18,9 +17,9 @@ namespace AxamlMapControl.Source
 
         static MapItem()
         {
-            SelectableMixin.Attach<MapItem>(IsSelectedProperty);
-            PressedMixin.Attach<MapItem>();
             FocusableProperty.OverrideDefaultValue<MapItem>(true);
+            LocationProperty.Changed.AddClassHandler<MapItem>((item, e) =>
+                MapLocationLayer.SetLocation(item, e.NewValue is Location location ? location : null));
         }
     }
 }

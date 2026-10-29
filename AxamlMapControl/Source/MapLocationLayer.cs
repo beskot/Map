@@ -11,8 +11,8 @@ namespace AxamlMapControl.Source
     {
         public static readonly StyledProperty<bool> ShowChildrenBoundsProperty =
             AvaloniaProperty.Register<MapLocationLayer, bool>(nameof(ShowChildrenBounds), false);
-        public static readonly AttachedProperty<Location> LocationProperty =
-            AvaloniaProperty.RegisterAttached<MapLocationLayer, Location>("Location", typeof(MapLocationLayer));
+        public static readonly AttachedProperty<Location?> LocationProperty =
+            AvaloniaProperty.RegisterAttached<MapLocationLayer, Control, Location?>("Location");
 
         static MapLocationLayer()
         {
@@ -26,7 +26,7 @@ namespace AxamlMapControl.Source
         }
 
         public static void SetLocation(AvaloniaObject element, Location? location) =>
-            element.SetValue(LocationProperty, location!);
+            element.SetValue(LocationProperty, location);
         public static Location? GetLocation(AvaloniaObject element) => element.GetValue(LocationProperty);
 
         public bool ShowChildrenBounds
@@ -72,7 +72,7 @@ namespace AxamlMapControl.Source
             return finalSize;
         }
 
-        private Point ElementAligment(IControl element, Point position)
+        private Point ElementAligment(Control element, Point position)
         {
             var x = element.HorizontalAlignment switch
             {
@@ -89,7 +89,7 @@ namespace AxamlMapControl.Source
             return new Point(x, y);
         }
 
-        private Point ElementPositionConstrain(IControl element, Point position)
+        private Point ElementPositionConstrain(Control element, Point position)
         {
             var constrain = MapParent.Transform.BoundsWidthConstrain(Bounds.Width);
             return position.WithX(ViewTransform.NormalizeValue(
