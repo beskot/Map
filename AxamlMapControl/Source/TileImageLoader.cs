@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Net.Http;
 using System.Threading;
@@ -10,60 +11,82 @@ namespace AxamlMapControl.Source
 {
     public class TileImageLoader : ITileImageLoader
     {
-        private ITileSource? _source;
-        private readonly ConcurrentQueue<Tile> _tileQueue;
-        private int _taskCount;
-        private int _taskLimit;
-
-        public HttpClient HttpClient { get; private set; } = new() { Timeout = TimeSpan.FromSeconds(15) };
-
-        public TileImageLoader()
+        private const int TaskLimit = 4;
+        private static readonly HttpClient SharedClient = new()
         {
-            _tileQueue = new();
-            _taskCount = 0;
-            _taskLimit = 4;
+            Timeout = TimeSpan.FromSeconds(15)
+        };
+        private readonly SemaphoreSlim _requestSlots = new(TaskLimit, TaskLimit);
+
+        public HttpClient HttpClient { get; }
+
+        public TileImageLoader() : this(SharedClient) { }
+
+        // The supplied client remains owned by the caller.
+        public TileImageLoader(HttpClient httpClient)
+        {
+            HttpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
         }
 
-        public async Task TileLoadAsync(IEnumerable<Tile> tiles, ITileSource source)
+        public Task TileLoadAsync(IEnumerable<Tile> tiles, ITileSource source)
         {
-            _source = source;
-            _tileQueue.Clear();
-
-            if (tiles.Any() && source != null)
-            {
-                foreach (var tile in tiles)
-                {
-                    _tileQueue.Enqueue(tile);
-                }
-
-                while (_taskCount < Math.Min(_tileQueue.Count, _taskLimit))
-                {
-                    Interlocked.Increment(ref _taskCount);
-                    await Task.Run(LoadTile);
-                }
-            }
+            return TileLoadAsync(tiles, source, CancellationToken.None);
         }
 
-        private async Task LoadTile()
+        public async Task TileLoadAsync(
+            IEnumerable<Tile> tiles, ITileSource source, CancellationToken cancellationToken)
         {
-            while (_tileQueue.TryDequeue(out var tile))
+            if (tiles is null) throw new ArgumentNullException(nameof(tiles));
+            if (source is null) throw new ArgumentNullException(nameof(source));
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var queue = new ConcurrentQueue<Tile>(tiles);
+            var workers = Enumerable.Range(0, Math.Min(queue.Count, TaskLimit))
+                .Select(_ => LoadTilesAsync(queue, source, cancellationToken))
+                .ToArray();
+            await Task.WhenAll(workers).ConfigureAwait(false);
+        }
+
+        private async Task LoadTilesAsync(
+            ConcurrentQueue<Tile> queue, ITileSource source, CancellationToken cancellationToken)
+        {
+            while (queue.TryDequeue(out var tile))
             {
+                await _requestSlots.WaitAsync(cancellationToken).ConfigureAwait(false);
                 try
                 {
-                    using (var responseMessage = await HttpClient.GetAsync(_source?.GetUri(tile), HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false))
+                    var uri = source.GetUri(tile);
+                    using var response = await HttpClient.GetAsync(
+                        uri, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
+                        .ConfigureAwait(false);
+                    if (response.IsSuccessStatusCode)
                     {
-                        if (responseMessage.IsSuccessStatusCode)
-                        {
-                            tile.ImageData = await responseMessage.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
-                        }
+                        var data = await response.Content.ReadAsByteArrayAsync(cancellationToken)
+                            .ConfigureAwait(false);
+                        cancellationToken.ThrowIfCancellationRequested();
+                        tile.ImageData = data;
+                    }
+                    else
+                    {
+                        Trace.TraceWarning(
+                            "Tile request {0} returned HTTP {1}.", uri, (int)response.StatusCode);
                     }
                 }
-                catch (System.Exception ex)
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
-                    Avalonia.Logging.Logger.TryGet(Avalonia.Logging.LogEventLevel.Debug, ex.Message);
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    Trace.TraceError(
+                        "Tile load failed for z={0}, x={1}, y={2}: {3}",
+                        tile.Zoom, tile.X, tile.Y, ex);
+                }
+                finally
+                {
+                    _requestSlots.Release();
                 }
             }
-            Interlocked.Decrement(ref _taskCount);
         }
     }
 }
