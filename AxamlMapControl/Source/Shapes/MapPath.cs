@@ -1,4 +1,4 @@
-
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using Avalonia;
@@ -9,85 +9,127 @@ using AxamlMapControl.Source.Proj;
 
 namespace AxamlMapControl.Source.Shapes
 {
-    /// <summary>
-    /// Map shape base.
-    /// </summary>
     public class MapPath : Path, IMapElement
     {
         public Map MapParent { get; private set; } = default!;
+        private bool _updating;
 
         static MapPath()
         {
-            DataProperty.AddOwner<MapPath>();
+            DataProperty.Changed.AddClassHandler<MapPath>((path, _) => path.InvalidateMeasure());
+            MapLocationLayer.LocationProperty.Changed.AddClassHandler<MapPath>(
+                (path, _) => path.RefreshGeometry());
         }
 
         public MapPath()
         {
-            AttachedToVisualTree += (o, e) =>
-            {
-                MapParent = this.FindAncestorOfType<Map>();
-            };
+            AttachedToVisualTree += (_, _) => SetMapParent(this.FindAncestorOfType<Map>());
+            DetachedFromVisualTree += (_, _) => SetMapParent(null);
             ClipToBounds = true;
         }
 
-        protected override Geometry CreateDefiningGeometry()
+        internal void SetMapParent(Map? map)
         {
-            return Data;
+            if (ReferenceEquals(MapParent, map)) return;
+            var previous = MapParent;
+            if (previous is { }) previous.Transform.ViewBoundsChanged -= ViewChanged;
+            MapParent = map!;
+            OnMapParentChanged(previous, map);
+            if (map is { }) map.Transform.ViewBoundsChanged += ViewChanged;
+            RefreshGeometry();
         }
+
+        protected virtual void OnMapParentChanged(Map? previous, Map? current) { }
+
+        private void ViewChanged(object? sender, MapEventArgs e)
+        {
+            if (MapParent is { } map && ReferenceEquals(sender, map.Transform)) RefreshGeometry();
+        }
+
+        internal void RefreshGeometry()
+        {
+            if (_updating) return;
+            UpdateGeometry();
+            InvalidateMeasure();
+            InvalidateVisual();
+        }
+
+        private void UpdateGeometry()
+        {
+            if (_updating) return;
+            _updating = true;
+            try { Update(); }
+            finally { _updating = false; }
+        }
+
+        protected override Geometry CreateDefiningGeometry() => Data;
 
         protected override Size ArrangeOverride(Size finalSize)
         {
-            if (MapParent != null)
-            {
-                Update();
-            }
-
+            UpdateGeometry();
             return finalSize;
         }
 
-        /// <summary>
-        /// Update of the path.
-        /// </summary>
         protected virtual void Update()
         {
-            var location = MapLocationLayer.GetLocation(this);
-            var scale = MapParent.Transform.GetScale(location);
-            var matrix = new Matrix(1 / scale.X, 0, 0, 1 / -scale.Y, DesiredSize.Width / 2, DesiredSize.Height / 2);
-
-            Data.Transform = new MatrixTransform(matrix);
+            if (MapParent is not { } map || Data is not { } data ||
+                MapLocationLayer.GetLocation(this) is not { } location) return;
+            var scale = map.Transform.GetScale(location);
+            data.Transform = new MatrixTransform(new Matrix(
+                1 / scale.X, 0, 0, -1 / scale.Y, DesiredSize.Width / 2, DesiredSize.Height / 2));
         }
 
-        /// <summary>
-        /// Get TopLeft location of the path.
-        /// </summary>
-        /// <param name="locations">Locations</param>
-        /// <returns>Location</returns>
+        protected void UpdateGeographicGeometry(IEnumerable<Location>? locations,
+            int minimumPoints, bool isClosed, bool isFilled)
+        {
+            var values = locations?.ToArray() ?? Array.Empty<Location>();
+            if (Data is not PathGeometry data)
+            {
+                data = new PathGeometry();
+                Data = data;
+            }
+            data.Figures.Clear();
+            if (values.Length < minimumPoints || values.Any(location => location is null ||
+                !double.IsFinite(location.Latitude) || !double.IsFinite(location.Longitude)))
+            {
+                MapLocationLayer.SetLocation(this, null);
+                return;
+            }
+
+            var origin = GetTopLeftLocation(values);
+            MapLocationLayer.SetLocation(this, origin);
+            if (MapParent is not { } map) return;
+            var projectedOrigin = map.Transform.LocationToCartesian(origin);
+            var scale = map.Transform.Scale;
+            var points = values.Select(location =>
+            {
+                var point = map.Transform.LocationToCartesian(location);
+                return new Point((point.X - projectedOrigin.X) / scale,
+                    (projectedOrigin.Y - point.Y) / scale);
+            }).ToArray();
+            data.Transform = null;
+            data.Figures.Add(CreateFigure(points, isClosed, isFilled));
+        }
+
         protected Location GetTopLeftLocation(IEnumerable<Location> locations)
         {
-            var lat = locations.Select(p => p.Latitude).Max();
-            var lon = locations.Select(p => p.Longitude).Min();
-
-            return new Location(lat, lon);
+            var values = locations?.ToArray() ?? Array.Empty<Location>();
+            if (values.Length == 0) return new Location();
+            return new Location(values.Max(location => location.Latitude),
+                values.Min(location => location.Longitude));
         }
 
-        /// <summary>
-        /// Create figure.
-        /// </summary>
-        /// <param name="points">Points</param>
-        /// <param name="isClosed">IsClosed</param>
-        /// <param name="isFilled">IsFilled</param>
-        /// <returns>Path figure</returns>
         protected PathFigure CreateFigure(IEnumerable<Point> points, bool isClosed, bool isFilled)
         {
-            PathFigure figure = new PathFigure
+            var values = points?.ToArray() ?? Array.Empty<Point>();
+            var figure = new PathFigure
             {
-                StartPoint = points.First(),
                 IsClosed = isClosed,
-                IsFilled = isFilled,
+                IsFilled = isFilled
             };
-
-            figure.Segments?.AddRange(points.Skip(1).Select(p => new LineSegment { Point = p }));
-
+            if (values.Length == 0) return figure;
+            figure.StartPoint = values[0];
+            figure.Segments?.AddRange(values.Skip(1).Select(point => new LineSegment { Point = point }));
             return figure;
         }
     }
