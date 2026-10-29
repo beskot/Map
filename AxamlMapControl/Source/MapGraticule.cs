@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Linq;
 using Avalonia;
 using Avalonia.Media;
@@ -21,16 +22,16 @@ namespace AxamlMapControl.Source
                 {
                     var viewPoint = Transform.LocationToView(location);
                     var offset = StrokeThickness / 2;
-                    context.DrawText(Foreground, viewPoint - new Point(-2 - offset, FontSize + 4 + offset),
-                        SetTextFormat(location.GetLatitudeDms().ToString()));
-                    context.DrawText(Foreground, viewPoint + new Point(2 + offset, 0 + offset),
-                        SetTextFormat(location.GetLongitudeDms().ToString()));
+                    context.DrawText(SetTextFormat(location.GetLatitudeDms().ToString()),
+                        viewPoint - new Point(-2 - offset, FontSize + 4 + offset));
+                    context.DrawText(SetTextFormat(location.GetLongitudeDms().ToString()),
+                        viewPoint + new Point(2 + offset, 0 + offset));
                 });
         }
 
         private FormattedText SetTextFormat(string text) => new FormattedText(
-            text, new Typeface(FontFamily, FontStyle, FontWeight), FontSize,
-            TextAlignment.Left, TextWrapping.NoWrap, new Size(150, 30));
+            text, CultureInfo.InvariantCulture, Avalonia.Media.FlowDirection.LeftToRight,
+            new Typeface(FontFamily, FontStyle, FontWeight), FontSize, Foreground);
 
         private double CalculateLineDistance(double minLineDistance)
         {

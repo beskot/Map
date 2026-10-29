@@ -1,28 +1,23 @@
 # Avalonia 12 migration status
 
-Status: in progress, not build-verified. Work remains on `fix/axamlmapcontrol-stability`. The pre-migration commit is `85bc20aec91ebe20bc8c314feb2a9eaed28737e5`.
+Status: in progress, not build-verified. Branch: `fix/axamlmapcontrol-stability`. Pre-migration commit: `85bc20aec91ebe20bc8c314feb2a9eaed28737e5`.
 
 ## Prepared changes
 
-- Avalonia, Desktop and Fluent theme: 12.1.4.
-- ReactiveUI.Avalonia.Reactive: 12.1.6; System.Reactive is explicit.
-- RequestedThemeVariant replaces the old FluentTheme Mode setting.
-- Reflection bindings remain enabled during migration.
-- Removed Avalonia.Diagnostics and AttachDevTools references.
-- MapItemsControl uses container override methods and a Panel template instead of the old generator and IPanel.
-- MapItem relies on ListBoxItem selection/pressed behavior rather than old mixins. Its Location property forwards geographic coordinates to the placement layer.
-- ItemsPresenter no longer binds removed Items, ItemTemplate or VirtualizationMode properties.
-- Map item styles no longer depend on obsolete theme brush names or a TemplateBinding outside a template. Default highlight colors changed to local literal colors; application templates can override them.
-- ViewLocator uses Control and nullable IDataTemplate methods.
-- Placement helpers use Control, with generic attached-property registration.
-- Sample data uses ItemsSource, and marker sizing lives inside the template.
+- Avalonia, Desktop and Fluent theme 12.1.4; ReactiveUI.Avalonia.Reactive 12.1.6.
+- System.Reactive is an explicit dependency; reflection bindings remain enabled.
+- Updated startup and RequestedThemeVariant; removed legacy diagnostics calls.
+- Migrated map item container creation, presenter templates, ViewLocator, attached-property registration and sample ItemsSource binding.
+- Graticule labels now use the culture/flow-direction/typeface/brush FormattedText constructor and DrawText(text, origin). The old fixed text box constraint is no longer applied; label layout needs visual verification.
+- Location.Parse no longer depends on Avalonia's old StringTokenizer.
+- Coordinate lists accept comma-separated pairs, separated by whitespace or semicolons. Spaces around commas are supported. Decimal points are invariant-culture dots; scientific notation is allowed. Empty lists are allowed; malformed and non-finite parsed values are rejected.
+- Added coordinate parser tests. Equality, hashing and mutability of Location are intentionally unchanged in this migration stage and still need their separate review.
 
 ## Still outstanding
 
-- FormattedText and DrawingContext text rendering.
-- Removed StringTokenizer usages and coordinate converters.
-- Remaining removed or changed APIs in the source tree and remaining themes.
-- Headless/UI test platform initialization.
+- Remaining removed or changed APIs and remaining themes.
+- Headless/UI test initialization.
 - README synchronization.
+- Restore, Release and Debug builds, all tests, and a desktop smoke test.
 
-The sample keeps its existing tile endpoint and geometry coordinates; provider availability was not verified. These changes are not proof of a successful Avalonia 12 build. Restore, build both Release and Debug, run tests, and perform a desktop smoke test before merging. Earlier CI success does not validate this migration.
+Neither these edits nor tests being present establish a successful Avalonia 12 build. Check CI for the exact commit. Earlier stabilization CI success does not validate the migration.

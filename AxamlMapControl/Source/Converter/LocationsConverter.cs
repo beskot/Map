@@ -7,21 +7,11 @@ namespace AxamlMapControl.Source.Converter
 {
     public class LocationsConverter : TypeConverter
     {
-        public override bool CanConvertFrom(ITypeDescriptorContext context, Type sourceType)
-        {
-            return sourceType == typeof(string);
-        }
-        public override object ConvertFrom(ITypeDescriptorContext context, CultureInfo culture, object value)
-        {
-            var result = new Locations();
-            var values = ((string)value).Split(';', ' ');
+        public override bool CanConvertFrom(ITypeDescriptorContext? context, Type sourceType) =>
+            sourceType == typeof(string) || base.CanConvertFrom(context, sourceType);
 
-            foreach (var s in values)
-            {
-                result.Add(Location.Parse(s));
-            }
-
-            return result;
-        }
+        public override object? ConvertFrom(ITypeDescriptorContext? context, CultureInfo? culture, object value) =>
+            value is string text ? CoordinateTextParser.ParseLocations(text)
+                : base.ConvertFrom(context, culture, value);
     }
 }
