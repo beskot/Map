@@ -54,6 +54,8 @@ namespace AxamlMapControl.Source
         public ViewTransform Transform { get; } = new();
         private Point _mousePosition;
         private Point? _zoomFocus;
+        private bool _hasView;
+        private Rect LocalViewBounds => new Rect(0, 0, Bounds.Width, Bounds.Height);
 
         static Map()
         {
@@ -65,7 +67,7 @@ namespace AxamlMapControl.Source
                 if (e.NewValue is MapTileLayer newLayer) map.Children.Insert(0, newLayer);
             });
             CenterProperty.Changed.AddClassHandler<Map>((map, _) => map.UpdateCenter());
-            BoundsProperty.Changed.AddClassHandler<Map>((map, _) => map.UpdateCenter());
+            BoundsProperty.Changed.AddClassHandler<Map>((map, _) => map.UpdateBounds());
             ZoomLevelProperty.Changed.AddClassHandler<Map>((map, _) => map.UpdateZoom());
             MinZoomLevelProperty.Changed.AddClassHandler<Map>((map, _) =>
             {
@@ -117,14 +119,23 @@ namespace AxamlMapControl.Source
 
         private void UpdateCenter()
         {
-            if (!Bounds.IsEmpty && Center is { } center)
-                Transform.SetZoom(center, ZoomLevel, Bounds);
+            if (Bounds.IsEmpty || Center is not { } center) return;
+            Transform.SetZoom(center, ZoomLevel, LocalViewBounds);
+            _hasView = true;
+        }
+
+        private void UpdateBounds()
+        {
+            if (Bounds.IsEmpty) return;
+            if (!_hasView) UpdateCenter();
+            else Transform.Resize(LocalViewBounds);
         }
 
         private void UpdateZoom()
         {
-            if (!Bounds.IsEmpty)
-                Transform.SetZoom(_zoomFocus ?? Bounds.Center, ZoomLevel, Bounds);
+            if (Bounds.IsEmpty) return;
+            if (!_hasView) UpdateCenter();
+            else Transform.SetZoom(_zoomFocus ?? LocalViewBounds.Center, ZoomLevel, LocalViewBounds);
         }
     }
 }

@@ -4,207 +4,139 @@ using AxamlMapControl.Source.Proj;
 
 namespace AxamlMapControl.Source
 {
-    /// <summary>
-    /// Map transform.
-    /// </summary>
     public class ViewTransform
     {
-        /// <summary>
-        /// Map bounds
-        /// </summary>
+        // Retained for source compatibility. Prefer SetZoom and Resize for bounds changes.
         public Rect _mapBounds;
-
-        /// <summary>
-        /// Zoom level
-        /// </summary>
         private int _zoomCurrent;
-
-        /// <summary>
-        /// View center
-        /// </summary>
         private Point _viewCenter;
 
-        /// <summary>
-        /// Matrix transform
-        /// </summary>
-        private Matrix _matrixCartesianTransform;
-
-        /// <summary>
-        /// Cartesian coordinate of map top left point
-        /// </summary>
-        public Point TopLeftCartesianOrigin { get; private set; }
-
-        /// <summary>
-        /// Cartesian coordinate of map bottom right point
-        /// </summary>
-        public Point BottomRightCartesianOrigin { get; private set; }
-
-        /// <summary>
-        /// Scale of map
-        /// </summary>
+        public Point TopLeftCartesianOrigin { get; } =
+            new(-MapProjection.OriginShift, MapProjection.OriginShift);
+        public Point BottomRightCartesianOrigin { get; } =
+            new(MapProjection.OriginShift, -MapProjection.OriginShift);
         public double Scale { get; private set; }
+        public MapProjection Projection { get; } = new();
 
-        /// <summary>
-        /// Map projection
-        /// </summary>
-        /// <value></value>
-        public MapProjection Projection { get; }
-
-        /// <summary>
-        /// View center. 
-        /// </summary>
+        // Screen position of the projected origin, not the geographic viewport center.
         public Point ViewCenter
         {
             get => _viewCenter;
             set
             {
+                ValidatePoint(value);
                 _viewCenter = value;
-
-                _matrixCartesianTransform = new Matrix(
-                    Scale,
-                    0,
-                    0,
-                    -Scale,
-                    _viewCenter.X * -Scale,
-                    _viewCenter.Y * Scale);
             }
         }
 
-        /// <summary>
-        /// Event handler
-        /// </summary>
         public EventHandler<MapEventArgs>? ViewBoundsChanged;
 
         public ViewTransform()
         {
-            _matrixCartesianTransform = new();
-            Projection = new();
-
-            TopLeftCartesianOrigin = new(-MapProjection.OriginShift, MapProjection.OriginShift);
-            BottomRightCartesianOrigin = new(MapProjection.OriginShift, -MapProjection.OriginShift);
-
             Scale = GetScale(0);
+            ViewCenter = new Point();
         }
 
-        /// <summary>
-        /// Get scale.
-        /// </summary>
-        /// <param name="zoomLevel">Zoom</param>
-        /// <returns>Scale</returns>
+        private static void ValidatePoint(Point point)
+        {
+            if (!double.IsFinite(point.X) || !double.IsFinite(point.Y))
+                throw new ArgumentOutOfRangeException(nameof(point));
+        }
+
+        private static void ValidateBounds(Rect bounds)
+        {
+            if (!double.IsFinite(bounds.X) || !double.IsFinite(bounds.Y) ||
+                !double.IsFinite(bounds.Width) || !double.IsFinite(bounds.Height) ||
+                !double.IsFinite(bounds.Right) || !double.IsFinite(bounds.Bottom) ||
+                bounds.Width <= 0 || bounds.Height <= 0)
+                throw new ArgumentOutOfRangeException(nameof(bounds));
+        }
+
         public double GetScale(int zoomLevel)
         {
-            if (zoomLevel < 0)
-            {
-                zoomLevel = 0;
-            }
-
-            var initialResolution = 2 * MapProjection.OriginShift / MapTileLayer.TileSize;
-            var res = initialResolution / Math.Pow(2, zoomLevel);
-
-            return res;
+            if (zoomLevel < 0 || zoomLevel > 30)
+                throw new ArgumentOutOfRangeException(nameof(zoomLevel));
+            return (2 * MapProjection.OriginShift / MapTileLayer.TileSize) / Math.Pow(2, zoomLevel);
         }
 
-        /// <summary>
-        /// Get cartesian coordinate from display coordinate.
-        /// </summary>
-        /// <param name="point">Display coordinate</param>
-        /// <returns>Cartesian coordinate</returns>
         public Point ViewToCartesian(Point point)
         {
-            return point.Transform(_matrixCartesianTransform);
+            ValidatePoint(point);
+            var result = new Point((point.X - ViewCenter.X) * Scale,
+                (ViewCenter.Y - point.Y) * Scale);
+            ValidatePoint(result);
+            return result;
         }
 
-        /// <summary>
-        /// Get display coordinate from cartesian coordinate.
-        /// </summary>
-        /// <param name="point">Cartesian coordinate</param>
-        /// <returns>Display coordinate</returns>
         public Point CartesianToView(Point point)
         {
-            return point.Transform(_matrixCartesianTransform.Invert());
+            ValidatePoint(point);
+            var result = new Point(point.X / Scale + ViewCenter.X,
+                ViewCenter.Y - point.Y / Scale);
+            ValidatePoint(result);
+            return result;
         }
 
-        /// <summary>
-        /// Transform of map bounds.
-        /// </summary>
-        /// <returns>Map bounds transformed</returns>
         public Rect GetViewBounds()
         {
-            var viewTopLeft = _mapBounds.TopLeft
-                .Transform(_matrixCartesianTransform);
-
-            var point = new Point(
-                (viewTopLeft.X - TopLeftCartesianOrigin.X) / Scale,
-                (TopLeftCartesianOrigin.Y - viewTopLeft.Y) / Scale
-            );
-
-            return _mapBounds.Translate(point);
+            var topLeft = ViewToCartesian(_mapBounds.TopLeft);
+            return new Rect((topLeft.X - TopLeftCartesianOrigin.X) / Scale,
+                (TopLeftCartesianOrigin.Y - topLeft.Y) / Scale,
+                _mapBounds.Width, _mapBounds.Height);
         }
 
-        /// <summary>
-        /// Calculate point of zoom.
-        /// </summary>
-        /// <param name="pointZoomFocus">Point of focus</param>
-        /// <param name="newScale">Scale value</param>
-        /// <returns></returns>
-        private Point CalculateZoomPoint(Point pointZoomFocus, double newScale)
+        private void Apply(Point origin, double scale, int zoom, Rect bounds)
         {
-            var viewOffsetX = (pointZoomFocus.X - ViewCenter.X) * Scale;
-            var viewOffsetY = (pointZoomFocus.Y - ViewCenter.Y) * Scale;
-            var contentOffsetX = viewOffsetX / newScale;
-            var contentOffsetY = viewOffsetY / newScale;
-            var newOffsetX = pointZoomFocus.X - contentOffsetX;
-            var newOffsetY = pointZoomFocus.Y - contentOffsetY;
-
-            Scale = newScale;
-
-            return new(newOffsetX, newOffsetY);
-        }
-
-        /// <summary>
-        /// Set zoom in display point.
-        /// </summary>
-        /// <param name="point">Display point</param>
-        /// <param name="zoom">Zoom level</param>
-        /// <param name="bounds">Map bounds</param>
-        public void SetZoom(Point point, int zoom, Rect bounds)
-        {
+            ValidatePoint(origin);
+            var translation = zoom == _zoomCurrent ? origin - ViewCenter : new Vector();
             _mapBounds = bounds;
-            ViewCenter = CalculateZoomPoint(point, GetScale(zoom));
-
+            Scale = scale;
+            _zoomCurrent = zoom;
+            ViewCenter = origin;
             ViewBoundsChanged?.Invoke(this, new MapEventArgs
             {
-                ZoomLevel = zoom
+                ZoomLevel = zoom,
+                Translate = translation
             });
-
-            _zoomCurrent = zoom;
         }
 
-        /// <summary>
-        /// Set zoom in location.
-        /// </summary>
-        /// <param name="location">Location</param>
-        /// <param name="zoom">Zoom level</param>
-        /// <param name="bounds">Map bounds</param>
+        /// <summary>Change zoom while keeping the projected point under the focus fixed.</summary>
+        public void SetZoom(Point point, int zoom, Rect bounds)
+        {
+            ValidateBounds(bounds);
+            var scale = GetScale(zoom);
+            var anchor = ViewToCartesian(point);
+            Apply(new Point(point.X - anchor.X / scale, point.Y + anchor.Y / scale),
+                scale, zoom, bounds);
+        }
+
+        /// <summary>Place a geographic location at the viewport center.</summary>
         public void SetZoom(Location location, int zoom, Rect bounds)
         {
-            if (ViewCenter.IsDefault)
-            {
-                ViewCenter = bounds.Center;
-            }
-
-            var point = CartesianToView(Projection.ToCartesian(location));
-            SetZoom(point, zoom, bounds);
+            ValidateBounds(bounds);
+            CenterOnCartesian(Projection.ToCartesian(location), zoom, bounds);
         }
 
-        /// <summary>
-        /// Translate of map.
-        /// </summary>
-        /// <param name="translate">Translate value</param>
+        private void CenterOnCartesian(Point point, int zoom, Rect bounds)
+        {
+            var scale = GetScale(zoom);
+            Apply(new Point(bounds.Center.X - point.X / scale,
+                bounds.Center.Y + point.Y / scale), scale, zoom, bounds);
+        }
+
+        /// <summary>Resize without discarding the current projected viewport center.</summary>
+        public void Resize(Rect bounds)
+        {
+            ValidateBounds(bounds);
+            var oldCenter = _mapBounds.IsEmpty ? bounds.Center : _mapBounds.Center;
+            var point = ViewToCartesian(oldCenter);
+            CenterOnCartesian(point, _zoomCurrent, bounds);
+        }
+
         public void Translate(Vector translate)
         {
+            ValidatePoint(new Point(translate.X, translate.Y));
             ViewCenter += translate;
-
             ViewBoundsChanged?.Invoke(this, new MapEventArgs
             {
                 Translate = translate,
@@ -212,40 +144,31 @@ namespace AxamlMapControl.Source
             });
         }
 
-        /// <summary>
-        /// Get normalized value.
-        /// </summary>
-        /// <param name="val">Value</param>
-        /// <param name="step">Step</param>
-        /// <returns>Normal value</returns>
         public static int NormalizeValue(int val, int step)
         {
-            return ((val % step) + step) % step;
+            if (step <= 0) throw new ArgumentOutOfRangeException(nameof(step));
+            var remainder = val % step;
+            return remainder < 0 ? remainder + step : remainder;
         }
 
-        /// <summary>
-        /// Get normalized value.
-        /// </summary>
-        /// <param name="val">Value</param>
-        /// <param name="step">Step</param>
-        /// <returns>Normal value</returns>
         public static double NormalizeValue(double val, double step)
         {
-            return ((val % step) + step) % step;
+            if (!double.IsFinite(val)) throw new ArgumentOutOfRangeException(nameof(val));
+            if (!double.IsFinite(step) || step <= 0)
+                throw new ArgumentOutOfRangeException(nameof(step));
+            var remainder = val % step;
+            var result = remainder < 0 ? remainder + step : remainder;
+            return result >= step ? 0 : result;
         }
 
-        /// <summary>
-        /// Constrain width of map bounds.
-        /// </summary>
-        /// <param name="bounds">Width of map bounds</param>
-        /// <returns>Constrain width of map bounds</returns>
         public double BoundsWidthConstrain(double bounds)
         {
+            if (!double.IsFinite(bounds) || bounds < 0)
+                throw new ArgumentOutOfRangeException(nameof(bounds));
             var mapWidth = 2 * MapProjection.OriginShift / Scale;
-            var viewWidth = (Math.Floor(bounds / mapWidth) + 1) * mapWidth;
-            var constrain = Math.Max(mapWidth, viewWidth);
-
-            return constrain;
+            var result = Math.Max(1d, Math.Ceiling(bounds / mapWidth)) * mapWidth;
+            if (!double.IsFinite(result)) throw new ArgumentOutOfRangeException(nameof(bounds));
+            return result;
         }
     }
 }
