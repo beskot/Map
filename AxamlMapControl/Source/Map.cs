@@ -5,144 +5,126 @@ using Avalonia.Media;
 
 namespace AxamlMapControl.Source
 {
-    /// <summary>
-    /// Map control.
-    /// </summary>
     public class Map : Panel
     {
-        public static readonly StyledProperty<int> MinZoomLevelProperty
-            = AvaloniaProperty.Register<Map, int>(nameof(MinZoomLevel), 0);
-
-        public static readonly StyledProperty<int> MaxZoomLevelProperty
-            = AvaloniaProperty.Register<Map, int>(nameof(MaxZoomLevel), 20);
-
-        public static readonly StyledProperty<int> ZoomLevelProperty
-            = AvaloniaProperty.Register<Map, int>(nameof(ZoomLevel), 0,
-             coerce: (o, val) =>
-            {
-                var ret = val;
-                if (o is Map map)
+        public static readonly StyledProperty<int> MinZoomLevelProperty =
+            AvaloniaProperty.Register<Map, int>(nameof(MinZoomLevel), 0,
+                coerce: (_, value) => Math.Min(30, Math.Max(0, value)));
+        public static readonly StyledProperty<int> MaxZoomLevelProperty =
+            AvaloniaProperty.Register<Map, int>(nameof(MaxZoomLevel), 20,
+                coerce: (_, value) => Math.Min(30, Math.Max(0, value)));
+        public static readonly StyledProperty<int> ZoomLevelProperty =
+            AvaloniaProperty.Register<Map, int>(nameof(ZoomLevel), 0,
+                coerce: (owner, value) =>
                 {
-                    ret = Math.Min(Math.Max(val, map.MinZoomLevel), map.MaxZoomLevel);
-                }
-
-                return ret;
-            });
-
-        public static readonly StyledProperty<MapTileLayer> TileLayerProperty
-            = AvaloniaProperty.Register<Map, MapTileLayer>(nameof(TileLayer),
-                 new MapTileLayer());
-
-        public static readonly StyledProperty<Proj.Location> CenterProperty
-            = AvaloniaProperty.Register<Map, Proj.Location>(nameof(Center), new());
-
+                    var map = (Map)owner;
+                    return Math.Min(Math.Max(value, map.MinZoomLevel),
+                        Math.Max(map.MinZoomLevel, map.MaxZoomLevel));
+                });
+        public static readonly StyledProperty<MapTileLayer> TileLayerProperty =
+            AvaloniaProperty.Register<Map, MapTileLayer>(nameof(TileLayer));
+        public static readonly StyledProperty<Proj.Location> CenterProperty =
+            AvaloniaProperty.Register<Map, Proj.Location>(nameof(Center));
 
         public Proj.Location Center
         {
             get => GetValue(CenterProperty);
             set => SetValue(CenterProperty, value);
         }
-
         public int MinZoomLevel
         {
             get => GetValue(MinZoomLevelProperty);
             set => SetValue(MinZoomLevelProperty, value);
         }
-
         public int MaxZoomLevel
         {
             get => GetValue(MaxZoomLevelProperty);
             set => SetValue(MaxZoomLevelProperty, value);
         }
-
         public int ZoomLevel
         {
             get => GetValue(ZoomLevelProperty);
             set => SetValue(ZoomLevelProperty, value);
         }
-
         public MapTileLayer TileLayer
         {
             get => GetValue(TileLayerProperty);
             set => SetValue(TileLayerProperty, value);
         }
-
-        public ViewTransform Transform { get; private set; } = new();
-
+        public ViewTransform Transform { get; } = new();
         private Point _mousePosition;
+        private Point? _zoomFocus;
 
         static Map()
         {
             ClipToBoundsProperty.OverrideMetadata<Map>(new StyledPropertyMetadata<bool>(true));
             BackgroundProperty.OverrideMetadata<Map>(new StyledPropertyMetadata<IBrush>());
+            TileLayerProperty.Changed.AddClassHandler<Map>((map, e) =>
+            {
+                if (e.OldValue is MapTileLayer oldLayer) map.Children.Remove(oldLayer);
+                if (e.NewValue is MapTileLayer newLayer) map.Children.Insert(0, newLayer);
+            });
+            CenterProperty.Changed.AddClassHandler<Map>((map, _) => map.UpdateCenter());
+            BoundsProperty.Changed.AddClassHandler<Map>((map, _) => map.UpdateCenter());
+            ZoomLevelProperty.Changed.AddClassHandler<Map>((map, _) => map.UpdateZoom());
+            MinZoomLevelProperty.Changed.AddClassHandler<Map>((map, _) =>
+            {
+                if (map.MaxZoomLevel < map.MinZoomLevel) map.MaxZoomLevel = map.MinZoomLevel;
+                map.CoerceValue(ZoomLevelProperty);
+            });
+            MaxZoomLevelProperty.Changed.AddClassHandler<Map>((map, _) =>
+            {
+                if (map.MinZoomLevel > map.MaxZoomLevel) map.MinZoomLevel = map.MaxZoomLevel;
+                map.CoerceValue(ZoomLevelProperty);
+            });
         }
 
         public Map()
         {
-            PointerPressed += (o, e) =>
+            Center = new Proj.Location();
+            TileLayer = new MapTileLayer();
+            PointerPressed += (_, e) =>
             {
-                if (e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
-                {
-                    _mousePosition = e.GetPosition(this);
-                    e.Pointer.Capture(this);
-                }
+                if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) return;
+                _mousePosition = e.GetPosition(this);
+                e.Pointer.Capture(this);
             };
-            PointerReleased += (o, e) =>
+            PointerReleased += (_, e) =>
             {
-                if (e.Pointer.Captured == this && e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
+                if (e.Pointer.Captured == this &&
+                    !e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
+                    e.Pointer.Capture(null);
+            };
+            PointerMoved += (_, e) =>
+            {
+                if (e.Pointer.Captured != this) return;
+                if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
                 {
                     e.Pointer.Capture(null);
+                    return;
                 }
+                var position = e.GetPosition(this);
+                Transform.Translate(position - _mousePosition);
+                _mousePosition = position;
             };
-            PointerWheelChanged += (o, e) =>
+            PointerWheelChanged += (_, e) =>
             {
-                ZoomLevel += Math.Sign(e.Delta.Y);
-                Transform.SetZoom(e.GetPosition(this), ZoomLevel, Bounds);
+                _zoomFocus = e.GetPosition(this);
+                try { ZoomLevel += Math.Sign(e.Delta.Y); }
+                finally { _zoomFocus = null; }
             };
-            PointerMoved += (o, e) =>
-            {
-                if (e.Pointer.Captured == this)
-                {
-                    var pos = e.GetPosition(this);
-                    Transform.Translate(pos - _mousePosition);
-                    _mousePosition = pos;
-                }
-            };
-
-            TileLayerProperty.Changed.AddClassHandler<Map>((o, e) => o.MapTileLayerChange(e));
-            CenterProperty.Changed.AddClassHandler<Map>((o, e) => o.CenterChange(e));
-            BoundsProperty.Changed.AddClassHandler<Map>((o, e) => o.BoundsChanged(e));
-
-            Children.Add(TileLayer);
         }
 
-        private void CenterChange(AvaloniaPropertyChangedEventArgs e)
+        private void UpdateCenter()
+        {
+            if (!Bounds.IsEmpty && Center is { } center)
+                Transform.SetZoom(center, ZoomLevel, Bounds);
+        }
+
+        private void UpdateZoom()
         {
             if (!Bounds.IsEmpty)
-            {
-                Transform.SetZoom(Center, ZoomLevel, Bounds);
-            }
-        }
-
-        private void MapTileLayerChange(AvaloniaPropertyChangedEventArgs e)
-        {
-            if (e.OldValue is MapTileLayer oldLayer)
-            {
-                Children.Remove(oldLayer);
-            }
-
-            if (e.NewValue is MapTileLayer newLayer)
-            {
-                Children.Insert(0, newLayer);
-            }
-        }
-
-        private void BoundsChanged(AvaloniaPropertyChangedEventArgs e)
-        {
-            if (e.NewValue is Rect bounds)
-            {
-                Transform.SetZoom(Center, ZoomLevel, bounds);
-            }
+                Transform.SetZoom(_zoomFocus ?? Bounds.Center, ZoomLevel, Bounds);
         }
     }
 }

@@ -6,42 +6,52 @@ using Microsoft.Extensions.Caching.Memory;
 
 namespace AxamlMapControl.Source.Cache
 {
-    /// <summary>
-    /// TileLoader caching in the memory.
-    /// </summary>
-    public class TileImageCache : ITileImageLoader
+    /// <summary>Memory cache limited by the number of encoded image bytes.</summary>
+    public class TileImageCache : ITileImageLoader, IDisposable
     {
-        private ITileImageLoader _tileLoader;
-        private IMemoryCache _cache;
+        private const long DefaultSizeLimit = 64L * 1024 * 1024;
+        private readonly ITileImageLoader _tileLoader;
+        private readonly MemoryCache _cache;
+        private readonly long _sizeLimit;
 
-        public TileImageCache()
+        public TileImageCache() : this(new TileImageLoader(), DefaultSizeLimit) { }
+
+        // The supplied loader remains owned by the caller.
+        public TileImageCache(ITileImageLoader tileLoader, long sizeLimit = DefaultSizeLimit)
         {
-            _tileLoader = new TileImageLoader();
-            _cache = new MemoryCache(new MemoryCacheOptions());
+            _tileLoader = tileLoader ?? throw new ArgumentNullException(nameof(tileLoader));
+            if (sizeLimit <= 0) throw new ArgumentOutOfRangeException(nameof(sizeLimit));
+            _sizeLimit = sizeLimit;
+            _cache = new MemoryCache(new MemoryCacheOptions { SizeLimit = sizeLimit });
         }
 
         public async Task TileLoadAsync(IEnumerable<Tile> tiles, ITileSource source)
         {
-            foreach (var tile in tiles)
+            if (tiles is null) throw new ArgumentNullException(nameof(tiles));
+            if (source is null) throw new ArgumentNullException(nameof(source));
+            var requests = tiles.Select(tile =>
+                (Tile: tile, Key: source.GetUri(tile).ToString())).ToList();
+            foreach (var request in requests)
             {
-                tile.ImageData = _cache.Get<byte[]>(source.GetUri(tile).ToString());
+                if (_cache.TryGetValue(request.Key, out byte[] data))
+                    request.Tile.ImageData = data;
             }
 
-            if (tiles.Where(p => p.ImageData is null) is { } list && list.Any())
+            var missing = requests.Where(request => request.Tile.ImageData is null).ToList();
+            if (missing.Count == 0) return;
+            await _tileLoader.TileLoadAsync(
+                missing.Select(request => request.Tile).ToList(), source);
+
+            foreach (var request in missing)
             {
-                list = list.ToList();
-                await _tileLoader.TileLoadAsync(list, source);
-                await Task.Run(() =>
-                {
-                    foreach (var item in list)
-                    {
-                        _cache.Set(
-                            source.GetUri(item).ToString(),
-                            item.ImageData,
-                            new MemoryCacheEntryOptions().SetAbsoluteExpiration(TimeSpan.FromMinutes(10)));
-                    }
-                });
+                var data = request.Tile.ImageData;
+                if (data is null || data.Length == 0 || data.LongLength > _sizeLimit) continue;
+                _cache.Set(request.Key, data, new MemoryCacheEntryOptions()
+                    .SetSize(data.LongLength)
+                    .SetAbsoluteExpiration(TimeSpan.FromMinutes(10)));
             }
         }
+
+        public void Dispose() => _cache.Dispose();
     }
 }
