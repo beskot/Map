@@ -1,6 +1,7 @@
 using System;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Headless.XUnit;
 using Avalonia.Media;
 using AxamlMapControl.Source;
 using AxamlMapControl.Source.Proj;
@@ -11,7 +12,7 @@ namespace AxamlMapControlTests
 {
     public class MapShapeTests
     {
-        [Fact]
+        [AvaloniaFact]
         public void LinesKeepIndependentEndpointsAndAnchors()
         {
             var first = new MapLine { StartPoint = new Location(10, 20), EndPoint = new Location(5, 30) };
@@ -22,7 +23,7 @@ namespace AxamlMapControlTests
             Assert.Equal(new Location(5, 30), first.EndPoint);
         }
 
-        [Fact]
+        [AvaloniaFact]
         public void IncompleteShapesHaveEmptyGeometry()
         {
             var map = new Map();
@@ -48,7 +49,7 @@ namespace AxamlMapControlTests
             polygon.SetMapParent(null);
         }
 
-        [Fact]
+        [AvaloniaFact]
         public void CollectionEditsUpdateAnchorAndOldCollectionIsUnsubscribed()
         {
             var old = new Locations(new Location(1, 2), new Location(3, 4));
@@ -65,7 +66,7 @@ namespace AxamlMapControlTests
             Assert.Empty(((PathGeometry)line.Data).Figures);
         }
 
-        [Fact]
+        [AvaloniaFact]
         public void PathSubscriptionsFollowOnlyTheCurrentMap()
         {
             var first = new Map();
@@ -85,7 +86,7 @@ namespace AxamlMapControlTests
             Assert.Equal(3, path.Updates);
         }
 
-        [Fact]
+        [AvaloniaFact]
         public void ZoomRebuildsLineGeometryWithoutWaitingForArrange()
         {
             var map = new Map();
@@ -99,7 +100,7 @@ namespace AxamlMapControlTests
             line.SetMapParent(null);
         }
 
-        [Fact]
+        [AvaloniaFact]
         public void LocationChangeInvalidatesLayerArrangement()
         {
             var layer = new MapLocationLayer();
@@ -113,7 +114,7 @@ namespace AxamlMapControlTests
             Assert.False(layer.IsArrangeValid);
         }
 
-        [Fact]
+        [AvaloniaFact]
         public void EmptyFigureAndMissingPathDataDoNotThrow()
         {
             var path = new CountingPath();

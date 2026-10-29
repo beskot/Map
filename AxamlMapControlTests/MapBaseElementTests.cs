@@ -1,5 +1,6 @@
 using Avalonia;
 using Avalonia.Collections;
+using Avalonia.Headless.XUnit;
 using Avalonia.Media;
 using AxamlMapControl.Source;
 using Xunit;
@@ -8,7 +9,7 @@ namespace AxamlMapControlTests
 {
     public class MapBaseElementTests
     {
-        [Fact]
+        [AvaloniaFact]
         public void SwitchingParentsAndDetachingRemoveOldSubscriptions()
         {
             var first = new Map();
@@ -29,7 +30,7 @@ namespace AxamlMapControlTests
             Assert.Null(element.MapParent);
         }
 
-        [Fact]
+        [AvaloniaFact]
         public void AttachingToAnArrangedMapPerformsInitialUpdate()
         {
             var map = new Map();
@@ -41,7 +42,7 @@ namespace AxamlMapControlTests
             element.SetMapParent(null);
         }
 
-        [Fact]
+        [AvaloniaFact]
         public void DashOffsetAndCollectionMutationsRebuildPen()
         {
             var dashes = new AvaloniaList<double> { 2, 3 };

@@ -5,19 +5,19 @@ Status: in progress, not build-verified. Branch: `fix/axamlmapcontrol-stability`
 ## Prepared changes
 
 - Avalonia, Desktop and Fluent theme 12.1.4; ReactiveUI.Avalonia.Reactive 12.1.6.
-- System.Reactive is an explicit dependency; reflection bindings remain enabled.
-- Updated startup and RequestedThemeVariant; removed legacy diagnostics calls.
-- Migrated map item container creation, presenter templates, ViewLocator, attached-property registration and sample ItemsSource binding.
-- Graticule labels now use the culture/flow-direction/typeface/brush FormattedText constructor and DrawText(text, origin). The old fixed text box constraint is no longer applied; label layout needs visual verification.
-- Location.Parse no longer depends on Avalonia's old StringTokenizer.
-- Coordinate lists accept comma-separated pairs, separated by whitespace or semicolons. Spaces around commas are supported. Decimal points are invariant-culture dots; scientific notation is allowed. Empty lists are allowed; malformed and non-finite parsed values are rejected.
-- Added coordinate parser tests. Equality, hashing and mutability of Location are intentionally unchanged in this migration stage and still need their separate review.
+- Explicit System.Reactive dependency and reflection-binding compatibility mode.
+- Migrated startup, map item containers, presenter templates, ViewLocator, attached-property registration and sample bindings.
+- Graticule text uses the modern FormattedText constructor and DrawText(text, origin). Label layout needs visual verification.
+- Independent invariant-culture coordinate parser and parser tests replace the old StringTokenizer dependency. Location equality/hashing remain a separate outstanding fix.
+- UI tests use Avalonia.Headless.XUnit 12.1.4 and AvaloniaFact, with Fluent and the library styles loaded in a test application. Skia supplies actual geometry/rendering services without visible windows.
+- Tests pin xunit.v3 to 3.2.2 rather than its incompatible 4.x line. The project is executable as required by xUnit v3; VSTest integration remains the intended CI path. Discovery and execution are not yet verified.
+- Test parallelization is disabled to avoid interference while validating shared UI infrastructure. Pure computation and storage tests remain ordinary Fact/Theory tests.
 
 ## Still outstanding
 
-- Remaining removed or changed APIs and remaining themes.
-- Headless/UI test initialization.
-- README synchronization.
-- Restore, Release and Debug builds, all tests, and a desktop smoke test.
+- A final source/API and XAML compatibility pass.
+- Run restore, Release and Debug builds, test discovery and the complete test suite.
+- Add end-to-end template, rendering and input tests; existing tests do not establish visual correctness.
+- README synchronization and a desktop smoke test.
 
-Neither these edits nor tests being present establish a successful Avalonia 12 build. Check CI for the exact commit. Earlier stabilization CI success does not validate the migration.
+Neither a configured test platform nor tests being present establish a successful build or test run. Check CI for the exact commit. Earlier stabilization success does not validate this migration.

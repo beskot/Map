@@ -1,4 +1,5 @@
 using System;
+using Avalonia.Headless.XUnit;
 using AxamlMapControl.Source;
 using Xunit;
 
@@ -6,7 +7,7 @@ namespace AxamlMapControlTests
 {
     public class TileSourceTests
     {
-        [Fact]
+        [AvaloniaFact]
         public void SourcesKeepIndependentFormatsAndValidateInput()
         {
             var first = new TileSource
