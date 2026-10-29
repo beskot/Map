@@ -1,0 +1,49 @@
+name: Verify stability commit
+
+on:
+  push:
+    branches:
+      - fix/axamlmapcontrol-stability
+    paths:
+      - .github/workflows/verify-stability.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact commit under test
+        uses: actions/checkout@v4
+        with:
+          ref: 4bc4dbf881cbe1199c34105daac1c40799729411
+          persist-credentials: false
+
+      - name: Install .NET 5 SDK and runtime
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 5.0.x
+
+      - name: Show SDK and runtime information
+        run: dotnet --info
+
+      - name: Restore dependencies
+        run: dotnet restore Map.sln
+
+      - name: Build solution
+        run: dotnet build Map.sln --configuration Release --no-restore
+
+      - name: Run tests
+        run: dotnet test AxamlMapControlTests/AxamlMapControlTests.csproj --configuration Release --no-build --no-restore --logger "trx;LogFileName=tests.trx" --results-directory TestResults
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-4bc4dbf
+          path: TestResults/**/*.trx
+          if-no-files-found: ignore
+          retention-days: 7
