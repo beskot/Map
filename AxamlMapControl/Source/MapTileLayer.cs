@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Media;
@@ -37,6 +38,7 @@ namespace AxamlMapControl.Source
         private readonly Dictionary<byte[], Bitmap> _images = new();
         private readonly HashSet<byte[]> _failedImages = new();
         private AvaloniaObject? _observedSource;
+        private CancellationTokenSource? _loadCancellation;
         private long _generation;
 
         static MapTileLayer()
@@ -54,11 +56,25 @@ namespace AxamlMapControl.Source
             {
                 ObserveSource(null);
                 _generation++;
+                CancelPendingLoads();
                 _tileList = new List<Tile>();
                 _currentTileMatrix = MapTileMatrix.Empty;
                 ClearImages();
                 InvalidateVisual();
             };
+        }
+
+        private void CancelPendingLoads()
+        {
+            var cancellation = _loadCancellation;
+            _loadCancellation = null;
+            if (cancellation is null) return;
+            try { cancellation.Cancel(); }
+            catch (AggregateException ex)
+            {
+                Trace.TraceError("Tile cancellation callback failed: {0}", ex);
+            }
+            // Disposed on the UI thread only after the batch finishes.
         }
 
         private void ObserveSource(AvaloniaObject? source)
@@ -77,6 +93,7 @@ namespace AxamlMapControl.Source
         private void ResetTiles()
         {
             _generation++;
+            CancelPendingLoads();
             _tileList = new List<Tile>();
             _currentTileMatrix = MapTileMatrix.Empty;
             ClearImages();
@@ -149,6 +166,8 @@ namespace AxamlMapControl.Source
             var changed = matrix != _currentTileMatrix || matrix.Length != _currentTileMatrix.Length;
             if (changed)
             {
+                _generation++;
+                CancelPendingLoads();
                 var previous = _tileList;
                 var next = new List<Tile>();
                 matrix.TraverseСells((zoom, x, y) =>
@@ -164,7 +183,6 @@ namespace AxamlMapControl.Source
                 });
                 _currentTileMatrix = matrix;
                 _tileList = next;
-                _generation++;
                 SynchronizeImages();
             }
 
@@ -179,18 +197,22 @@ namespace AxamlMapControl.Source
                 .ToList();
             if (pending.Count == 0) return;
             var snapshot = new ResolvedSource(source, pending);
-            _ = LoadTilesAsync(loader, snapshot, pending, _generation);
+            var cancellation = new CancellationTokenSource();
+            _loadCancellation = cancellation;
+            _ = LoadTilesAsync(loader, snapshot, pending, _generation, cancellation);
         }
 
         private async Task LoadTilesAsync(ITileImageLoader loader, ITileSource source,
-            List<Tile> tiles, long generation)
+            List<Tile> tiles, long generation, CancellationTokenSource cancellation)
         {
+            var token = cancellation.Token;
             try
             {
-                await loader.TileLoadAsync(tiles, source).ConfigureAwait(false);
+                await loader.TileLoadAsync(tiles, source, token).ConfigureAwait(false);
+                token.ThrowIfCancellationRequested();
                 Dispatcher.UIThread.Post(() =>
                 {
-                    if (generation != _generation || MapParent is null) return;
+                    if (token.IsCancellationRequested || generation != _generation || MapParent is null) return;
                     try
                     {
                         var loaded = new Dictionary<Tile, byte[]>();
@@ -208,9 +230,18 @@ namespace AxamlMapControl.Source
                     }
                 });
             }
+            catch (OperationCanceledException) when (token.IsCancellationRequested) { }
             catch (Exception ex)
             {
                 Trace.TraceError("Tile batch failed: {0}", ex);
+            }
+            finally
+            {
+                Dispatcher.UIThread.Post(() =>
+                {
+                    if (ReferenceEquals(_loadCancellation, cancellation)) _loadCancellation = null;
+                    cancellation.Dispose();
+                });
             }
         }
 

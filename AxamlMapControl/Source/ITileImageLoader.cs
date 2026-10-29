@@ -1,19 +1,20 @@
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace AxamlMapControl.Source
 {
-    /// <summary>
-    /// Loader map tile from repository.
-    /// </summary>
     public interface ITileImageLoader
     {
-        /// <summary>
-        /// Load ImageData of current collection tiles
-        /// </summary>
-        /// <param name="tiles">Collestion tiles</param>
-        /// <param name="source">Source data</param>
-        /// <returns>Task</returns>
         Task TileLoadAsync(IEnumerable<Tile> tiles, ITileSource source);
+
+        // Compatibility fallback: legacy implementations cannot interrupt their work.
+        async Task TileLoadAsync(IEnumerable<Tile> tiles, ITileSource source,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            await TileLoadAsync(tiles, source).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+        }
     }
 }
