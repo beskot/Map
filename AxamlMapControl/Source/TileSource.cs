@@ -1,54 +1,40 @@
 using System;
+using System.Globalization;
+using System.Threading;
 using Avalonia;
 
 namespace AxamlMapControl.Source
 {
-    /// <summary>
-    /// Tile source.
-    /// </summary>
     public class TileSource : AvaloniaObject, ITileSource
     {
-        public static readonly AvaloniaProperty<string> UriStringFormatProperty
-            = AvaloniaProperty.Register<TileSource, string>(nameof(UriStringFormat), string.Empty, false, Avalonia.Data.BindingMode.OneTime);
+        public static readonly StyledProperty<string> UriStringFormatProperty =
+            AvaloniaProperty.Register<TileSource, string>(nameof(UriStringFormat), string.Empty);
+
+        private string _uriStringFormat = string.Empty;
 
         public string UriStringFormat
         {
-            get => _uriStringFormat ?? string.Empty;
+            get => Volatile.Read(ref _uriStringFormat);
             set => SetValue(UriStringFormatProperty, value);
         }
 
-        private string? _uriStringFormat;
-
-        private System.Threading.SynchronizationContext _context = new();
-
-        public TileSource()
+        static TileSource()
         {
-            UriStringFormatProperty.Changed.AddClassHandler<TileSource>((_, e) => _uriStringFormat = (e.NewValue is string s) ? s : string.Empty);
-        }
-
-        private Uri GetUri(int z, int x, int y)
-        {
-            if (string.IsNullOrEmpty(_uriStringFormat))
-            {
-                throw new NullReferenceException("UriStringFormat is null or empty.");
-            }
-
-            var tileUri = _uriStringFormat
-                .Replace("{z}", z.ToString())
-                .Replace("{x}", x.ToString())
-                .Replace("{y}", y.ToString());
-
-            return new Uri(tileUri);
+            UriStringFormatProperty.Changed.AddClassHandler<TileSource>((source, e) =>
+                Volatile.Write(ref source._uriStringFormat,
+                    e.NewValue is string value ? value : string.Empty));
         }
 
         public Uri GetUri(Tile tile)
         {
-            return GetUri(tile.Zoom, tile.X, tile.Y);
-        }
-
-        private char GetServer()
-        {
-            return new[] { 'a', 'b', 'c' }[new Random().Next(0, 2)];
+            if (tile is null) throw new ArgumentNullException(nameof(tile));
+            var format = UriStringFormat;
+            if (string.IsNullOrWhiteSpace(format))
+                throw new InvalidOperationException("A tile URI format must be configured.");
+            return new Uri(format
+                .Replace("{z}", tile.Zoom.ToString(CultureInfo.InvariantCulture))
+                .Replace("{x}", tile.X.ToString(CultureInfo.InvariantCulture))
+                .Replace("{y}", tile.Y.ToString(CultureInfo.InvariantCulture)), UriKind.Absolute);
         }
     }
 }
