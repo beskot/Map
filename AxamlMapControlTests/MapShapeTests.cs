@@ -7,6 +7,7 @@ using AxamlMapControl.Source;
 using AxamlMapControl.Source.Proj;
 using AxamlMapControl.Source.Shapes;
 using Xunit;
+using Location = AxamlMapControl.Source.Proj.Location;
 
 namespace AxamlMapControlTests
 {

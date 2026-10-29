@@ -4,6 +4,7 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.VisualTree;
 using AxamlMapControl.Source.Proj;
+using Location = AxamlMapControl.Source.Proj.Location;
 
 namespace AxamlMapControl.Source
 {

@@ -1,6 +1,7 @@
 using Avalonia;
 using Avalonia.Controls;
 using AxamlMapControl.Source.Proj;
+using Location = AxamlMapControl.Source.Proj.Location;
 
 namespace AxamlMapControl.Source
 {
