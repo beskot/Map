@@ -177,7 +177,8 @@ namespace AxamlMapControl.Source
             if (MapParent is null || !(MapParent.Bounds.Width > 0 && MapParent.Bounds.Height > 0)) return;
             ObserveSource(TileSource as AvaloniaObject);
             var matrix = MapTileMatrix.Create(zoomLevel, MapParent.Transform.GetViewBounds(), TileSize);
-            if (matrix != _currentTileMatrix)
+            var matrixChanged = matrix != _currentTileMatrix;
+            if (matrixChanged)
             {
                 var previous = _tileList;
                 if (previous.Any(HasImage) && (_fallbackTiles.Count == 0 || previous.All(HasImage)))
@@ -200,13 +201,18 @@ namespace AxamlMapControl.Source
             }
             RenderTransform = new MatrixTransform(Matrix.CreateTranslation(
                 ViewTopLeft + _currentTileMatrix.Origin + PointTranslated));
-            InvalidateTiles();
-            PumpLoads();
+            // A translation moves retained content without rebuilding the tile drawing.
+            if (matrixChanged)
+            {
+                InvalidateTiles();
+                PumpLoads();
+            }
         }
 
         // UI-thread scheduler: the latest viewport is the queue; in-flight work survives panning.
         private void PumpLoads()
         {
+            if (_activeLoads >= ParallelLoads) return;
             if (MapParent is null || _currentTileMatrix.IsEmpty || TileSource is null || TileImageLoader is null) return;
             if (TileSource is TileSource && string.IsNullOrWhiteSpace(TileSource.UriStringFormat)) return;
             var centerX = (_currentTileMatrix.Xmin + (double)_currentTileMatrix.Xmax) / 2;
