@@ -34,6 +34,7 @@ namespace AxamlMapControl.Source
         public const int TileSize = 256;
         private MapTileMatrix _currentTileMatrix = MapTileMatrix.Empty;
         private List<Tile> _tileList = new();
+        private List<Tile> _fallbackTiles = new();
         // Array keys use reference equality: repeated world copies share one bitmap.
         private readonly Dictionary<byte[], Bitmap> _images = new();
         private readonly HashSet<byte[]> _failedImages = new();
@@ -113,15 +114,19 @@ namespace AxamlMapControl.Source
 
         private void ClearImages()
         {
+            _fallbackTiles.Clear();
             foreach (var image in _images.Values) image.Dispose();
             _images.Clear();
             _failedImages.Clear();
         }
 
+        private bool HasImage(Tile tile) =>
+            tile.ImageData is { } data && _images.ContainsKey(data);
+
         // Called only from UI updates, never from Render or a loader worker.
         private void SynchronizeImages()
         {
-            var visible = new HashSet<byte[]>(_tileList
+            var visible = new HashSet<byte[]>(_tileList.Concat(_fallbackTiles)
                 .Where(tile => tile.ImageData is { Length: > 0 })
                 .Select(tile => tile.ImageData!));
             foreach (var data in _images.Keys.Where(data => !visible.Contains(data)).ToList())
@@ -146,16 +151,30 @@ namespace AxamlMapControl.Source
                     Trace.TraceError("Tile image decoding failed: {0}", ex);
                 }
             }
+            if (_fallbackTiles.Count > 0 && _tileList.Count > 0 && _tileList.All(HasImage))
+            {
+                _fallbackTiles.Clear();
+                SynchronizeImages();
+            }
         }
 
         private void RenderTiles(DrawingContext context)
         {
-            foreach (var tile in _tileList)
+            if (_currentTileMatrix.IsEmpty) return;
+            DrawTiles(context, _fallbackTiles);
+            DrawTiles(context, _tileList);
+        }
+
+        private void DrawTiles(DrawingContext context, IEnumerable<Tile> tiles)
+        {
+            foreach (var tile in tiles)
             {
                 if (tile.ImageData is not { } data || !_images.TryGetValue(data, out var image)) continue;
-                context.DrawImage(image,
-                    new Rect((tile.XIndex - _currentTileMatrix.Xmin) * TileSize,
-                        (tile.Y - _currentTileMatrix.Ymin) * TileSize, TileSize, TileSize));
+                var scale = Math.Pow(2d, _currentTileMatrix.Zoom - tile.Zoom);
+                var size = TileSize * scale;
+                var x = (tile.XIndex * scale - _currentTileMatrix.Xmin) * TileSize;
+                var y = (tile.Y * scale - _currentTileMatrix.Ymin) * TileSize;
+                context.DrawImage(image, new Rect(x, y, size, size));
             }
         }
 
@@ -178,11 +197,16 @@ namespace AxamlMapControl.Source
                 _generation++;
                 CancelPendingLoads();
                 var previous = _tileList;
+                // Keep one loaded snapshot; rapid zooms must not replace it with empty tiles.
+                if (previous.Any(HasImage) &&
+                    (_fallbackTiles.Count == 0 || previous.All(HasImage)))
+                    _fallbackTiles = previous.Where(HasImage).ToList();
+                var reusable = previous.Concat(_fallbackTiles).ToList();
                 var next = new List<Tile>();
                 matrix.TraverseСells((zoom, x, y) =>
                 {
                     var tileX = ViewTransform.NormalizeValue(x, matrix.NumTiles);
-                    var old = previous.Find(tile => tile.Zoom == zoom && tile.X == tileX &&
+                    var old = reusable.Find(tile => tile.Zoom == zoom && tile.X == tileX &&
                         tile.Y == y && tile.XIndex == x);
                     next.Add(new Tile(zoom, tileX, y)
                     {
