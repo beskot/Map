@@ -117,10 +117,16 @@ namespace AxamlMapControl.Source.Shapes
                 data = new PathGeometry();
                 Data = data;
             }
-            // Geometry observers do not support collection Reset notifications.
-            while (data.Figures.Count > 0)
+            var figures = data.Figures;
+            if (figures is null)
             {
-                data.Figures.RemoveAt(data.Figures.Count - 1);
+                figures = new PathFigures();
+                data.Figures = figures;
+            }
+            // Geometry observers do not support collection Reset notifications.
+            while (figures.Count > 0)
+            {
+                figures.RemoveAt(figures.Count - 1);
             }
             if (values.Length < minimumPoints || values.Any(location => location is null ||
                 !double.IsFinite(location.Latitude) || !double.IsFinite(location.Longitude)))
@@ -143,7 +149,7 @@ namespace AxamlMapControl.Source.Shapes
                     (projectedOrigin.Y - point.Y) / scale);
             }).ToArray();
             data.Transform = null;
-            data.Figures.Add(CreateFigure(points, isClosed, isFilled));
+            figures.Add(CreateFigure(points, isClosed, isFilled));
         }
 
         protected Location GetTopLeftLocation(IEnumerable<Location> locations)

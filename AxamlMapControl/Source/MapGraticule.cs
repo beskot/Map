@@ -55,7 +55,8 @@ namespace AxamlMapControl.Source
             var transform = Transform;
             var size = map.Bounds.Size;
             var distance = CalculateLineDistance(150);
-            var delta = transform.ViewCenter - _cachedCenter;
+            var center = transform.ViewCenter;
+            var delta = new Vector(center.X - _cachedCenter.X, center.Y - _cachedCenter.Y);
             if (!_cacheValid || !ReferenceEquals(transform, _cachedTransform) ||
                 !_cachedScale.Equals(transform.Scale) || !_cachedDistance.Equals(distance) ||
                 !_cachedSize.Equals(size) ||
