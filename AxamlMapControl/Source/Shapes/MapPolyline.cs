@@ -1,6 +1,8 @@
 using System.Collections.Specialized;
+using System.ComponentModel;
 using Avalonia;
 using Avalonia.Media;
+using AxamlMapControl.Source.Converter;
 using AxamlMapControl.Source.Proj;
 
 namespace AxamlMapControl.Source.Shapes
@@ -10,6 +12,7 @@ namespace AxamlMapControl.Source.Shapes
         public static readonly StyledProperty<Locations> LocationsProperty =
             AvaloniaProperty.Register<MapPolyline, Locations>(nameof(Locations));
 
+        [TypeConverter(typeof(LocationsConverter))]
         public Locations Locations
         {
             get => GetValue(LocationsProperty);
