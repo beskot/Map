@@ -55,12 +55,12 @@ namespace AxamlMapControl.Source
         internal Point ConstrainVerticalOrigin(Point origin, double scale, Rect bounds)
         {
             if (!(bounds.Height > 0) || !(scale > 0) || !double.IsFinite(scale)) return origin;
-            var height = (TopLeftCartesianOrigin.Y - BottomRightCartesianOrigin.Y) / scale;
-            if (height > bounds.Height) return origin;
-            var minimumY = bounds.Top + TopLeftCartesianOrigin.Y / scale;
-            var maximumY = bounds.Bottom + BottomRightCartesianOrigin.Y / scale;
-            // A short map may move within the free space, but neither edge may leave the viewport.
-            return new Point(origin.X, Math.Clamp(origin.Y, minimumY, Math.Max(minimumY, maximumY)));
+            var topAlignedY = bounds.Top + TopLeftCartesianOrigin.Y / scale;
+            var bottomAlignedY = bounds.Bottom + BottomRightCartesianOrigin.Y / scale;
+            // Keep a short map inside the viewport; keep the viewport inside a tall map.
+            var minimumY = Math.Min(topAlignedY, bottomAlignedY);
+            var maximumY = Math.Max(topAlignedY, bottomAlignedY);
+            return new Point(origin.X, Math.Clamp(origin.Y, minimumY, maximumY));
         }
 
         public double GetScale(int zoomLevel)
