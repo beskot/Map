@@ -11,10 +11,12 @@ namespace AxamlMapControl.Source
     {
         private const int MaximumCachedLabels = 512;
         private const double CachePadding = 256;
+        private const double MinimumLabelGap = 4;
         private static readonly int[] LineDistances = { 1, 2, 5, 10, 15, 30, 60 };
         private readonly Dictionary<(double Coordinate, bool Latitude), FormattedText> _labels = new();
         private readonly List<(Point Start, Point End)> _lines = new();
         private readonly List<(Point Position, FormattedText Latitude, FormattedText Longitude)> _crossings = new();
+        private readonly List<Rect> _visibleLabelBounds = new();
         private ViewTransform? _cachedTransform;
         private Point _cachedCenter;
         private Size _cachedSize;
@@ -41,6 +43,7 @@ namespace AxamlMapControl.Source
                 _labels.Clear();
                 _lines.Clear();
                 _crossings.Clear();
+                _visibleLabelBounds.Clear();
                 _cachedTransform = null;
                 _cacheValid = false;
             };
@@ -64,6 +67,7 @@ namespace AxamlMapControl.Source
 
         private void RenderCore(DrawingContext context, double scale, Point origin)
         {
+            _visibleLabelBounds.Clear();
             if (MapParent is not { } map || !(map.Bounds.Width > 0 && map.Bounds.Height > 0)) return;
             var transform = Transform;
             var size = map.Bounds.Size;
@@ -111,10 +115,18 @@ namespace AxamlMapControl.Source
             }
         }
 
-        private static void DrawLabel(DrawingContext context, FormattedText text, Point position, Rect viewport)
+        private void DrawLabel(DrawingContext context, FormattedText text, Point position, Rect viewport)
         {
             var bounds = new Rect(position, new Size(text.Width, text.Height));
-            if (bounds.Intersects(viewport)) context.DrawText(text, position);
+            if (bounds.Width <= 0 || bounds.Height <= 0 ||
+                bounds.X < viewport.X || bounds.Y < viewport.Y ||
+                bounds.Right > viewport.Right || bounds.Bottom > viewport.Bottom) return;
+            var clearance = new Rect(bounds.X - MinimumLabelGap, bounds.Y - MinimumLabelGap,
+                bounds.Width + 2 * MinimumLabelGap, bounds.Height + 2 * MinimumLabelGap);
+            foreach (var occupied in _visibleLabelBounds)
+                if (clearance.Intersects(occupied)) return;
+            context.DrawText(text, position);
+            _visibleLabelBounds.Add(bounds);
         }
 
         private void RebuildCache(ViewTransform transform, Size size, double distance, Rect required, double padding)
