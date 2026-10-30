@@ -34,18 +34,22 @@
                     <shape:MapPolygon Stroke="{DynamicResource ColorBorder}" StrokeThickness="1"
                                       StrokeDashArray="3,2" Fill="#20A93144">
                         <shape:MapPolygon.Locations>
-                            <proj:Location>20,0</proj:Location>
-                            <proj:Location>20,10</proj:Location>
-                            <proj:Location>30,10</proj:Location>
-                            <proj:Location>30,0</proj:Location>
+                            <proj:Locations>
+                                <proj:Location>20,0</proj:Location>
+                                <proj:Location>20,10</proj:Location>
+                                <proj:Location>30,10</proj:Location>
+                                <proj:Location>30,0</proj:Location>
+                            </proj:Locations>
                         </shape:MapPolygon.Locations>
                     </shape:MapPolygon>
                     <shape:MapPolyline Stroke="{DynamicResource ColorBorder}" StrokeThickness="4">
                         <shape:MapPolyline.Locations>
-                            <proj:Location>30,11</proj:Location>
-                            <proj:Location>30,20</proj:Location>
-                            <proj:Location>20,20</proj:Location>
-                            <proj:Location>25,11</proj:Location>
+                            <proj:Locations>
+                                <proj:Location>30,11</proj:Location>
+                                <proj:Location>30,20</proj:Location>
+                                <proj:Location>20,20</proj:Location>
+                                <proj:Location>25,11</proj:Location>
+                            </proj:Locations>
                         </shape:MapPolyline.Locations>
                     </shape:MapPolyline>
                     <shape:MapPath map:MapLocationLayer.Location="34.9229, 33.6233"
