@@ -70,6 +70,8 @@ namespace AxamlMapControl.Source
             InvalidateVisual();
         }
 
+        internal void InvalidateZoomAnimation() => _tileSurface.InvalidateVisual();
+
         private void ClearTiles()
         {
             _generation++;
@@ -125,12 +127,24 @@ namespace AxamlMapControl.Source
             }
         }
 
+        private Matrix GetTileAnimationMatrix()
+        {
+            if (MapParent is not { } map || !map.TryGetTileAnimation(out var scale, out var origin))
+                return Matrix.Identity;
+            var offset = ViewTopLeft + _currentTileMatrix.Origin + PointTranslated;
+            var center = map.Transform.ViewCenter;
+            return new Matrix(scale, 0, 0, scale,
+                origin.X + (offset.X - center.X) * scale - offset.X,
+                origin.Y + (offset.Y - center.Y) * scale - offset.Y);
+        }
+
         private void RenderTiles(DrawingContext context)
         {
-            if (_currentTileMatrix.IsEmpty) return;
+            if (_currentTileMatrix.IsEmpty || MapParent is { SuppressTileCapture: true }) return;
             // Retain complete edge tiles so translation-only panning does not expose holes.
             var bounds = new Rect(0, 0, _currentTileMatrix.XLength * (double)TileSize,
                 _currentTileMatrix.YLength * (double)TileSize);
+            using (context.PushTransform(GetTileAnimationMatrix()))
             using (context.PushClip(bounds))
             {
                 DrawTiles(context, _fallbackTiles, bounds);
@@ -144,6 +158,7 @@ namespace AxamlMapControl.Source
             var scale = 1d;
             foreach (var tile in tiles)
             {
+                if (tile.Zoom > _currentTileMatrix.Zoom) continue;
                 if (tile.ImageData is not { } data || !_images.TryGetValue(data, out var image)) continue;
                 if (tile.Zoom != previousZoom)
                 {
@@ -183,8 +198,12 @@ namespace AxamlMapControl.Source
             if (matrixChanged)
             {
                 var previous = _tileList;
-                if (previous.Any(HasImage) && (_fallbackTiles.Count == 0 || previous.All(HasImage)))
+                var zoomingOut = !_currentTileMatrix.IsEmpty && matrix.Zoom < _currentTileMatrix.Zoom;
+                if (zoomingOut)
+                    _fallbackTiles.Clear();
+                else if (previous.Any(HasImage) && (_fallbackTiles.Count == 0 || previous.All(HasImage)))
                     _fallbackTiles = previous.Where(HasImage).ToList();
+                _fallbackTiles.RemoveAll(tile => tile.Zoom > matrix.Zoom);
                 var reusable = previous.Concat(_fallbackTiles)
                     .Where(HasImage)
                     .GroupBy(tile => tile).ToDictionary(group => group.Key, group => group.First().ImageData);
