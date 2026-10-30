@@ -37,6 +37,7 @@ namespace AxamlMapControl.Source
         // Array keys use reference equality: repeated world copies share one bitmap.
         private readonly Dictionary<byte[], Bitmap> _images = new();
         private readonly HashSet<byte[]> _failedImages = new();
+        private readonly LayerDrawingSurface _tileSurface;
         private AvaloniaObject? _observedSource;
         private CancellationTokenSource? _loadCancellation;
         private long _generation;
@@ -50,6 +51,8 @@ namespace AxamlMapControl.Source
 
         public MapTileLayer()
         {
+            _tileSurface = new LayerDrawingSurface(RenderTiles);
+            Children.Add(_tileSurface);
             TileImageLoader = new TileImageCache();
             TileSource = new TileSource();
             DetachedFromVisualTree += (_, _) =>
@@ -60,8 +63,14 @@ namespace AxamlMapControl.Source
                 _tileList = new List<Tile>();
                 _currentTileMatrix = MapTileMatrix.Empty;
                 ClearImages();
-                InvalidateVisual();
+                InvalidateTiles();
             };
+        }
+
+        private void InvalidateTiles()
+        {
+            _tileSurface?.InvalidateVisual();
+            InvalidateVisual();
         }
 
         private void CancelPendingLoads()
@@ -98,7 +107,7 @@ namespace AxamlMapControl.Source
             _currentTileMatrix = MapTileMatrix.Empty;
             ClearImages();
             ObserveSource(MapParent is null ? null : TileSource as AvaloniaObject);
-            InvalidateVisual();
+            InvalidateTiles();
             if (MapParent is { } map && !map.Bounds.IsEmpty) OnViewChanged(map.ZoomLevel);
         }
 
@@ -139,7 +148,7 @@ namespace AxamlMapControl.Source
             }
         }
 
-        public override void Render(DrawingContext context)
+        private void RenderTiles(DrawingContext context)
         {
             foreach (var tile in _tileList)
             {
@@ -188,7 +197,7 @@ namespace AxamlMapControl.Source
 
             RenderTransform = new MatrixTransform(Matrix.CreateTranslation(
                 ViewTopLeft + _currentTileMatrix.Origin + PointTranslated));
-            InvalidateVisual();
+            InvalidateTiles();
             if (!changed || source is null || loader is null) return;
             if (source is TileSource && string.IsNullOrWhiteSpace(source.UriStringFormat)) return;
             // Workers receive separate objects; visible tile data is published on the UI thread.
@@ -222,7 +231,7 @@ namespace AxamlMapControl.Source
                             if (tile.ImageData is null && loaded.TryGetValue(tile, out var data))
                                 tile.ImageData = data;
                         SynchronizeImages();
-                        InvalidateVisual();
+                        InvalidateTiles();
                     }
                     catch (Exception ex)
                     {

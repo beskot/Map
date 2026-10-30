@@ -14,6 +14,7 @@ namespace AxamlMapControl.Source
             AvaloniaProperty.Register<MapLocationLayer, bool>(nameof(ShowChildrenBounds), false);
         public static readonly AttachedProperty<Location?> LocationProperty =
             AvaloniaProperty.RegisterAttached<MapLocationLayer, Control, Location?>("Location");
+        private readonly LayerDrawingSurface _boundsSurface;
 
         static MapLocationLayer()
         {
@@ -23,7 +24,14 @@ namespace AxamlMapControl.Source
                 if (control.GetVisualParent() is MapLocationLayer layer) layer.InvalidateArrange();
             });
             ShowChildrenBoundsProperty.Changed.AddClassHandler<MapLocationLayer>(
-                (layer, _) => layer.InvalidateVisual());
+                (layer, _) => layer._boundsSurface?.InvalidateVisual());
+        }
+
+        public MapLocationLayer()
+        {
+            _boundsSurface = new LayerDrawingSurface(DrawChildrenBounds);
+            // A visual-only overlay must not become an ItemsPresenter item/container.
+            VisualChildren.Add(_boundsSurface);
         }
 
         public static void SetLocation(AvaloniaObject element, Location? location) =>
@@ -38,9 +46,8 @@ namespace AxamlMapControl.Source
 
         protected override void OnViewChanged(int zoomLevel) => InvalidateArrange();
 
-        public override void Render(DrawingContext context)
+        private void DrawChildrenBounds(DrawingContext context)
         {
-            base.Render(context);
             if (!ShowChildrenBounds) return;
             var pen = new Pen(Brushes.Gray, 2);
             foreach (var child in Children) context.DrawRectangle(Brushes.Transparent, pen, child.Bounds);
@@ -50,6 +57,7 @@ namespace AxamlMapControl.Source
         {
             var unconstrained = new Size(double.PositiveInfinity, double.PositiveInfinity);
             foreach (var element in Children) element.Measure(unconstrained);
+            _boundsSurface.Measure(new Size());
             return new Size();
         }
 
@@ -70,6 +78,8 @@ namespace AxamlMapControl.Source
                     item.Arrange(new Rect(position, item.DesiredSize));
                 }
             }
+            _boundsSurface.Arrange(new Rect(finalSize));
+            _boundsSurface.InvalidateVisual();
             return finalSize;
         }
 
