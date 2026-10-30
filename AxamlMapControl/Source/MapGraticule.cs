@@ -50,6 +50,7 @@ namespace AxamlMapControl.Source
 
         public override void Render(DrawingContext context)
         {
+            if (MapParent is { SuppressGraticuleRendering: true }) return;
             base.Render(context);
             if (MapParent is not { } map || !(map.Bounds.Width > 0 && map.Bounds.Height > 0)) return;
             var transform = Transform;

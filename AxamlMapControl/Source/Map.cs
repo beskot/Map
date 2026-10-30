@@ -6,6 +6,7 @@ using Avalonia.Input;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 
 namespace AxamlMapControl.Source
 {
@@ -82,6 +83,8 @@ namespace AxamlMapControl.Source
         private readonly DispatcherTimer _zoomTimer;
         private readonly Stopwatch _zoomClock = new();
         private RenderTargetBitmap? _zoomSnapshot;
+        private bool _capturingZoomSnapshot;
+        internal bool SuppressGraticuleRendering => _capturingZoomSnapshot || _zoomSnapshot is not null;
         private Size _snapshotSize;
         private Point _animationFocus;
         private double _animationStartZoom;
@@ -198,8 +201,10 @@ namespace AxamlMapControl.Source
                         Math.Max(1, checked((int)Math.Ceiling(Bounds.Width * scaling))),
                         Math.Max(1, checked((int)Math.Ceiling(Bounds.Height * scaling)))),
                         new Vector(96 * scaling, 96 * scaling));
-                    // Capture the current composite, including any interrupted transition.
-                    snapshot.Render(this);
+                    // Exclude grid lines and text from the scaled raster snapshot.
+                    _capturingZoomSnapshot = true;
+                    try { snapshot.Render(this); }
+                    finally { _capturingZoomSnapshot = false; }
                 }
                 catch (Exception ex)
                 {
@@ -233,6 +238,7 @@ namespace AxamlMapControl.Source
                 _animationDuration = ZoomAnimationDuration;
                 _zoomClock.Restart();
                 _zoomTimer.Start();
+                InvalidateGraticules();
                 _zoomSurface.InvalidateVisual();
             }
             e.Handled = true;
@@ -266,7 +272,14 @@ namespace AxamlMapControl.Source
             _zoomSnapshot = null;
             _visualZoom = ZoomLevel;
             snapshot?.Dispose();
+            if (snapshot is not null) InvalidateGraticules();
             _zoomSurface?.InvalidateVisual();
+        }
+
+        private void InvalidateGraticules()
+        {
+            foreach (var visual in this.GetVisualDescendants())
+                if (visual is MapGraticule graticule) graticule.InvalidateVisual();
         }
 
         private void DrawZoomAnimation(DrawingContext context)
