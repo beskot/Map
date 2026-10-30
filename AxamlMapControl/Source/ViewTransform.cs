@@ -25,7 +25,7 @@ namespace AxamlMapControl.Source
             set
             {
                 ValidatePoint(value);
-                _viewCenter = value;
+                _viewCenter = ConstrainVerticalOrigin(value, Scale, _mapBounds);
             }
         }
 
@@ -50,6 +50,17 @@ namespace AxamlMapControl.Source
                 !double.IsFinite(bounds.Right) || !double.IsFinite(bounds.Bottom) ||
                 bounds.Width <= 0 || bounds.Height <= 0)
                 throw new ArgumentOutOfRangeException(nameof(bounds));
+        }
+
+        internal Point ConstrainVerticalOrigin(Point origin, double scale, Rect bounds)
+        {
+            if (!(bounds.Height > 0) || !(scale > 0) || !double.IsFinite(scale)) return origin;
+            var height = (TopLeftCartesianOrigin.Y - BottomRightCartesianOrigin.Y) / scale;
+            if (height > bounds.Height) return origin;
+            var minimumY = bounds.Top + TopLeftCartesianOrigin.Y / scale;
+            var maximumY = bounds.Bottom + BottomRightCartesianOrigin.Y / scale;
+            // A short map may move within the free space, but neither edge may leave the viewport.
+            return new Point(origin.X, Math.Clamp(origin.Y, minimumY, Math.Max(minimumY, maximumY)));
         }
 
         public double GetScale(int zoomLevel)
@@ -88,6 +99,7 @@ namespace AxamlMapControl.Source
         private void Apply(Point origin, double scale, int zoom, Rect bounds)
         {
             ValidatePoint(origin);
+            origin = ConstrainVerticalOrigin(origin, scale, bounds);
             var translation = zoom == _zoomCurrent ? origin - ViewCenter : new Vector();
             _mapBounds = bounds;
             Scale = scale;
@@ -100,7 +112,7 @@ namespace AxamlMapControl.Source
             });
         }
 
-        /// <summary>Change zoom while keeping the projected point under the focus fixed.</summary>
+        /// <summary>Change zoom around the focus, subject to vertical viewport limits.</summary>
         public void SetZoom(Point point, int zoom, Rect bounds)
         {
             ValidateBounds(bounds);
@@ -110,7 +122,7 @@ namespace AxamlMapControl.Source
                 scale, zoom, bounds);
         }
 
-        /// <summary>Place a geographic location at the viewport center.</summary>
+        /// <summary>Place a geographic location at the viewport center, subject to vertical limits.</summary>
         public void SetZoom(Location location, int zoom, Rect bounds)
         {
             ValidateBounds(bounds);
@@ -124,7 +136,7 @@ namespace AxamlMapControl.Source
                 bounds.Center.Y + point.Y / scale), scale, zoom, bounds);
         }
 
-        /// <summary>Resize without discarding the current projected viewport center.</summary>
+        /// <summary>Resize while preserving the viewport center where vertical limits allow.</summary>
         public void Resize(Rect bounds)
         {
             ValidateBounds(bounds);
@@ -137,10 +149,13 @@ namespace AxamlMapControl.Source
         public void Translate(Vector translate)
         {
             ValidatePoint(new Point(translate.X, translate.Y));
-            ViewCenter += translate;
+            var previous = ViewCenter;
+            ViewCenter = previous + translate;
+            var applied = ViewCenter - previous;
+            if (applied.X == 0 && applied.Y == 0) return;
             ViewBoundsChanged?.Invoke(this, new MapEventArgs
             {
-                Translate = translate,
+                Translate = applied,
                 ZoomLevel = _zoomCurrent
             });
         }

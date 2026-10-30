@@ -300,6 +300,8 @@ namespace AxamlMapControl.Source
             _visualOrigin = new Point(
                 _animationFocus.X + (_animationStartOrigin.X - _animationFocus.X) * visualScale,
                 _animationFocus.Y + (_animationStartOrigin.Y - _animationFocus.Y) * visualScale);
+            _visualOrigin = Transform.ConstrainVerticalOrigin(_visualOrigin,
+                Transform.GetScale(0) / Math.Pow(2, _visualZoom), LocalViewBounds);
             if (_animateNewTiles) InvalidateAnimatedLayers();
             _zoomSurface.InvalidateVisual();
         }
