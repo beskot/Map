@@ -1,7 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Text;
-using ReactiveUI;
+using ReactiveUI.Reactive;
 
 namespace AxamlMapControlSample.ViewModels
 {
