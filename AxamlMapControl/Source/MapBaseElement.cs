@@ -149,7 +149,7 @@ namespace AxamlMapControl.Source
                 ObserveDashes(StrokeDashArray);
                 InvalidatePen();
                 map.Transform.ViewBoundsChanged += MapViewBoundsChangedHandler;
-                if (!map.Bounds.IsEmpty) OnViewChanged(map.ZoomLevel);
+                if (map.Bounds.Width > 0 && map.Bounds.Height > 0) OnViewChanged(map.ZoomLevel);
             }
             InvalidateVisual();
         }

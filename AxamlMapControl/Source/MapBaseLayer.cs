@@ -21,7 +21,7 @@ namespace AxamlMapControl.Source
                 _zoom = -1;
                 PointTranslated = new Point();
                 MapParent.Transform.ViewBoundsChanged += MapViewBoundsChangedHandler;
-                if (!MapParent.Bounds.IsEmpty)
+                if (MapParent.Bounds.Width > 0 && MapParent.Bounds.Height > 0)
                     MapViewBoundsChangedHandler(MapParent.Transform,
                         new MapEventArgs { ZoomLevel = MapParent.ZoomLevel });
             };

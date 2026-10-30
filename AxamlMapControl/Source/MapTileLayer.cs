@@ -108,7 +108,7 @@ namespace AxamlMapControl.Source
             ClearImages();
             ObserveSource(MapParent is null ? null : TileSource as AvaloniaObject);
             InvalidateTiles();
-            if (MapParent is { } map && !map.Bounds.IsEmpty) OnViewChanged(map.ZoomLevel);
+            if (MapParent is { } map && map.Bounds.Width > 0 && map.Bounds.Height > 0) OnViewChanged(map.ZoomLevel);
         }
 
         private void ClearImages()
@@ -167,7 +167,7 @@ namespace AxamlMapControl.Source
 
         private void UpdateView(int zoomLevel)
         {
-            if (MapParent is null || MapParent.Bounds.IsEmpty) return;
+            if (MapParent is null || !(MapParent.Bounds.Width > 0 && MapParent.Bounds.Height > 0)) return;
             var source = TileSource;
             var loader = TileImageLoader;
             ObserveSource(source as AvaloniaObject);

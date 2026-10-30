@@ -63,7 +63,7 @@ namespace AxamlMapControl.Source
 
         protected override Size ArrangeOverride(Size finalSize)
         {
-            if (MapParent is { } map && !map.Bounds.IsEmpty)
+            if (MapParent is { } map && map.Bounds.Width > 0 && map.Bounds.Height > 0)
             {
                 foreach (var item in Children)
                 {
