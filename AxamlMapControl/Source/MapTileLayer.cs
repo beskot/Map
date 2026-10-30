@@ -36,7 +36,6 @@ namespace AxamlMapControl.Source
         private List<Tile> _tileList = new();
         private List<Tile> _fallbackTiles = new();
         private readonly Dictionary<byte[], Bitmap> _images = new();
-        private readonly HashSet<byte[]> _failedImages = new();
         private readonly Dictionary<Tile, CancellationTokenSource> _requests = new();
         private readonly HashSet<Tile> _failedRequests = new();
         private readonly LayerDrawingSurface _tileSurface;
@@ -86,7 +85,6 @@ namespace AxamlMapControl.Source
             _currentTileMatrix = MapTileMatrix.Empty;
             foreach (var image in _images.Values) image.Dispose();
             _images.Clear();
-            _failedImages.Clear();
         }
 
         private void ObserveSource(AvaloniaObject? source)
@@ -113,36 +111,17 @@ namespace AxamlMapControl.Source
 
         private bool HasImage(Tile tile) => tile.ImageData is { } data && _images.ContainsKey(data);
 
+        // UI-thread ownership and eviction only; image decoding happens in LoadTileAsync.
         private void SynchronizeImages()
         {
+            if (_fallbackTiles.Count > 0 && _tileList.Count > 0 && _tileList.All(HasImage))
+                _fallbackTiles.Clear();
             var visible = new HashSet<byte[]>(_tileList.Concat(_fallbackTiles)
                 .Where(tile => tile.ImageData is { Length: > 0 }).Select(tile => tile.ImageData!));
             foreach (var data in _images.Keys.Where(data => !visible.Contains(data)).ToList())
             {
                 _images[data].Dispose();
                 _images.Remove(data);
-            }
-            _failedImages.IntersectWith(visible);
-            foreach (var data in visible)
-            {
-                if (_images.ContainsKey(data) || _failedImages.Contains(data)) continue;
-                try
-                {
-                    using var stream = new MemoryStream(data, writable: false);
-                    var image = new Bitmap(stream);
-                    try { _images.Add(data, image); }
-                    catch { image.Dispose(); throw; }
-                }
-                catch (Exception ex)
-                {
-                    _failedImages.Add(data);
-                    Trace.TraceError("Tile image decoding failed: {0}", ex);
-                }
-            }
-            if (_fallbackTiles.Count > 0 && _tileList.Count > 0 && _tileList.All(HasImage))
-            {
-                _fallbackTiles.Clear();
-                SynchronizeImages();
             }
         }
 
@@ -184,7 +163,7 @@ namespace AxamlMapControl.Source
                 if (previous.Any(HasImage) && (_fallbackTiles.Count == 0 || previous.All(HasImage)))
                     _fallbackTiles = previous.Where(HasImage).ToList();
                 var reusable = previous.Concat(_fallbackTiles)
-                    .Where(tile => tile.ImageData is { Length: > 0 })
+                    .Where(HasImage)
                     .GroupBy(tile => tile).ToDictionary(group => group.Key, group => group.First().ImageData);
                 var next = new List<Tile>();
                 matrix.TraverseСells((zoom, x, y) =>
@@ -244,43 +223,67 @@ namespace AxamlMapControl.Source
             Tile tile, long generation, CancellationTokenSource cancellation)
         {
             var token = cancellation.Token;
+            Bitmap? decoded = null;
             try
             {
-                // Each slot completes independently, including cache lookup and insertion.
-                await Task.Run(() => loader.TileLoadAsync(new[] { tile }, source, token), token)
-                    .ConfigureAwait(false);
+                decoded = await Task.Run(async () =>
+                {
+                    await loader.TileLoadAsync(new[] { tile }, source, token).ConfigureAwait(false);
+                    token.ThrowIfCancellationRequested();
+                    if (tile.ImageData is not { Length: > 0 } data) return (Bitmap?)null;
+                    using var stream = new MemoryStream(data, writable: false);
+                    return new Bitmap(stream);
+                }, token).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested) { }
-            catch (Exception ex) { Trace.TraceError("Tile load failed: {0}", ex); }
+            catch (Exception ex) { Trace.TraceError("Tile load or decode failed: {0}", ex); }
             finally
             {
-                Dispatcher.UIThread.Post(() =>
+                try
                 {
-                    _activeLoads--;
-                    if (_requests.TryGetValue(tile, out var current) && ReferenceEquals(current, cancellation))
-                        _requests.Remove(tile);
-                    try
+                    Dispatcher.UIThread.Post(() =>
                     {
-                        if (!token.IsCancellationRequested && generation == _generation && MapParent is not null)
+                        _activeLoads--;
+                        if (_requests.TryGetValue(tile, out var current) && ReferenceEquals(current, cancellation))
+                            _requests.Remove(tile);
+                        try
                         {
-                            if (tile.ImageData is { Length: > 0 } data)
+                            if (!token.IsCancellationRequested && generation == _generation && MapParent is not null)
                             {
-                                foreach (var visible in _tileList)
-                                    if (visible.Equals(tile)) visible.ImageData = data;
-                                SynchronizeImages();
-                                InvalidateTiles();
+                                if (decoded is not null && tile.ImageData is { Length: > 0 } data)
+                                {
+                                    var matches = _tileList.Where(visible => visible.Equals(tile)).ToList();
+                                    if (matches.Count > 0)
+                                    {
+                                        if (!_images.ContainsKey(data))
+                                        {
+                                            _images.Add(data, decoded);
+                                            decoded = null;
+                                        }
+                                        foreach (var visible in matches) visible.ImageData = data;
+                                        SynchronizeImages();
+                                        InvalidateTiles();
+                                    }
+                                }
+                                else _failedRequests.Add(tile);
                             }
-                            else _failedRequests.Add(tile);
                         }
-                    }
-                    catch (Exception ex) { Trace.TraceError("Publishing tile failed: {0}", ex); }
-                    finally
-                    {
-                        cancellation.Dispose();
-                        try { PumpLoads(); }
-                        catch (Exception ex) { Trace.TraceError("Scheduling tiles failed: {0}", ex); }
-                    }
-                }, DispatcherPriority.Normal);
+                        catch (Exception ex) { Trace.TraceError("Publishing tile failed: {0}", ex); }
+                        finally
+                        {
+                            decoded?.Dispose();
+                            cancellation.Dispose();
+                            try { PumpLoads(); }
+                            catch (Exception ex) { Trace.TraceError("Scheduling tiles failed: {0}", ex); }
+                        }
+                    }, DispatcherPriority.Normal);
+                }
+                catch
+                {
+                    decoded?.Dispose();
+                    cancellation.Dispose();
+                    throw;
+                }
             }
         }
 
