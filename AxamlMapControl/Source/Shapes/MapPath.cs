@@ -13,10 +13,21 @@ namespace AxamlMapControl.Source.Shapes
     {
         public Map MapParent { get; private set; } = default!;
         private bool _updating;
+        private bool _geometryDirty = true;
+        private bool _geographicGeometry;
+        private double _geometryScale = double.NaN;
 
         static MapPath()
         {
-            DataProperty.Changed.AddClassHandler<MapPath>((path, _) => path.InvalidateMeasure());
+            DataProperty.Changed.AddClassHandler<MapPath>((path, _) =>
+            {
+                if (!path._updating)
+                {
+                    path._geometryDirty = true;
+                    path._geographicGeometry = false;
+                }
+                path.InvalidateMeasure();
+            });
             MapLocationLayer.LocationProperty.Changed.AddClassHandler<MapPath>(
                 (path, _) => path.RefreshGeometry());
         }
@@ -43,12 +54,15 @@ namespace AxamlMapControl.Source.Shapes
 
         private void ViewChanged(object? sender, MapEventArgs e)
         {
-            if (MapParent is { } map && ReferenceEquals(sender, map.Transform)) RefreshGeometry();
+            if (MapParent is not { } map || !ReferenceEquals(sender, map.Transform)) return;
+            // MapLocationLayer handles position changes; local geometry depends on scale, not pan.
+            if (_geometryDirty || !_geometryScale.Equals(map.Transform.Scale)) RefreshGeometry();
         }
 
         internal void RefreshGeometry()
         {
             if (_updating) return;
+            _geometryDirty = true;
             UpdateGeometry();
             InvalidateMeasure();
             InvalidateVisual();
@@ -56,9 +70,14 @@ namespace AxamlMapControl.Source.Shapes
 
         private void UpdateGeometry()
         {
-            if (_updating) return;
+            if (_updating || !_geometryDirty) return;
             _updating = true;
-            try { Update(); }
+            try
+            {
+                Update();
+                _geometryDirty = false;
+                _geometryScale = MapParent is { } map ? map.Transform.Scale : double.NaN;
+            }
             finally { _updating = false; }
         }
 
@@ -67,6 +86,13 @@ namespace AxamlMapControl.Source.Shapes
         protected override Size ArrangeOverride(Size finalSize)
         {
             UpdateGeometry();
+            // Non-geographic paths (e.g. an ellipse in metres) use the measured size as their anchor.
+            if (!_geographicGeometry && !_updating)
+            {
+                _updating = true;
+                try { Update(); }
+                finally { _updating = false; }
+            }
             return finalSize;
         }
 
@@ -75,13 +101,16 @@ namespace AxamlMapControl.Source.Shapes
             if (MapParent is not { } map || Data is not { } data ||
                 MapLocationLayer.GetLocation(this) is not { } location) return;
             var scale = map.Transform.GetScale(location);
-            data.Transform = new MatrixTransform(new Matrix(
-                1 / scale.X, 0, 0, -1 / scale.Y, DesiredSize.Width / 2, DesiredSize.Height / 2));
+            var matrix = new Matrix(
+                1 / scale.X, 0, 0, -1 / scale.Y, DesiredSize.Width / 2, DesiredSize.Height / 2);
+            if (data.Transform is MatrixTransform transform && transform.Matrix.Equals(matrix)) return;
+            data.Transform = new MatrixTransform(matrix);
         }
 
         protected void UpdateGeographicGeometry(IEnumerable<Location>? locations,
             int minimumPoints, bool isClosed, bool isFilled)
         {
+            _geographicGeometry = true;
             var values = locations?.ToArray() ?? Array.Empty<Location>();
             if (Data is not PathGeometry data)
             {
@@ -101,7 +130,9 @@ namespace AxamlMapControl.Source.Shapes
             }
 
             var origin = GetTopLeftLocation(values);
-            MapLocationLayer.SetLocation(this, origin);
+            var currentOrigin = MapLocationLayer.GetLocation(this);
+            if (currentOrigin is null || !currentOrigin.Equals(origin))
+                MapLocationLayer.SetLocation(this, origin);
             if (MapParent is not { } map) return;
             var projectedOrigin = map.Transform.LocationToCartesian(origin);
             var scale = map.Transform.Scale;
