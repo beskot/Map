@@ -13,7 +13,8 @@ namespace AxamlMapControl.Source
         public override void Render(DrawingContext context)
         {
             base.Render(context);
-            if (MapParent is not { } map || map.Bounds.IsEmpty) return;
+            if (MapParent is not { } map) return;
+            if (!(map.Bounds.Width > 0 && map.Bounds.Height > 0)) return;
             var lineDistance = CalculateLineDistance(150);
             var bounds = new Rect(0, 0, map.Bounds.Width, map.Bounds.Height);
             Transform.GetMapBoundingBox(bounds)?.VisitingRoundByDistance(lineDistance,

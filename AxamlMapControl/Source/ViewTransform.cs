@@ -128,7 +128,8 @@ namespace AxamlMapControl.Source
         public void Resize(Rect bounds)
         {
             ValidateBounds(bounds);
-            var oldCenter = _mapBounds.IsEmpty ? bounds.Center : _mapBounds.Center;
+            var oldCenter = _mapBounds.Width > 0 && _mapBounds.Height > 0
+                ? _mapBounds.Center : bounds.Center;
             var point = ViewToCartesian(oldCenter);
             CenterOnCartesian(point, _zoomCurrent, bounds);
         }

@@ -119,21 +119,22 @@ namespace AxamlMapControl.Source
 
         private void UpdateCenter()
         {
-            if (Bounds.IsEmpty || Center is not { } center) return;
+            if (!(Bounds.Width > 0 && Bounds.Height > 0)) return;
+            if (Center is not { } center) return;
             Transform.SetZoom(center, ZoomLevel, LocalViewBounds);
             _hasView = true;
         }
 
         private void UpdateBounds()
         {
-            if (Bounds.IsEmpty) return;
+            if (!(Bounds.Width > 0 && Bounds.Height > 0)) return;
             if (!_hasView) UpdateCenter();
             else Transform.Resize(LocalViewBounds);
         }
 
         private void UpdateZoom()
         {
-            if (Bounds.IsEmpty) return;
+            if (!(Bounds.Width > 0 && Bounds.Height > 0)) return;
             if (!_hasView) UpdateCenter();
             else Transform.SetZoom(_zoomFocus ?? LocalViewBounds.Center, ZoomLevel, LocalViewBounds);
         }
