@@ -128,20 +128,43 @@ namespace AxamlMapControl.Source
         private void RenderTiles(DrawingContext context)
         {
             if (_currentTileMatrix.IsEmpty) return;
-            DrawTiles(context, _fallbackTiles);
-            DrawTiles(context, _tileList);
+            // Retain complete edge tiles so translation-only panning does not expose holes.
+            var bounds = new Rect(0, 0, _currentTileMatrix.XLength * (double)TileSize,
+                _currentTileMatrix.YLength * (double)TileSize);
+            using (context.PushClip(bounds))
+            {
+                DrawTiles(context, _fallbackTiles, bounds);
+                DrawTiles(context, _tileList, bounds);
+            }
         }
 
-        private void DrawTiles(DrawingContext context, IEnumerable<Tile> tiles)
+        private void DrawTiles(DrawingContext context, IEnumerable<Tile> tiles, Rect bounds)
         {
+            var previousZoom = -1;
+            var scale = 1d;
             foreach (var tile in tiles)
             {
                 if (tile.ImageData is not { } data || !_images.TryGetValue(data, out var image)) continue;
-                var scale = Math.Pow(2d, _currentTileMatrix.Zoom - tile.Zoom);
+                if (tile.Zoom != previousZoom)
+                {
+                    previousZoom = tile.Zoom;
+                    scale = Math.Pow(2d, _currentTileMatrix.Zoom - tile.Zoom);
+                }
                 var size = TileSize * scale;
-                context.DrawImage(image, new Rect(
-                    (tile.XIndex * scale - _currentTileMatrix.Xmin) * TileSize,
-                    (tile.Y * scale - _currentTileMatrix.Ymin) * TileSize, size, size));
+                var x = (tile.XIndex * scale - _currentTileMatrix.Xmin) * TileSize;
+                var y = (tile.Y * scale - _currentTileMatrix.Ymin) * TileSize;
+                var left = Math.Max(x, bounds.X);
+                var top = Math.Max(y, bounds.Y);
+                var right = Math.Min(x + size, bounds.Right);
+                var bottom = Math.Min(y + size, bounds.Bottom);
+                if (right <= left || bottom <= top) continue;
+                var destination = new Rect(left, top, right - left, bottom - top);
+                var pixels = image.PixelSize;
+                var source = new Rect((left - x) / size * pixels.Width,
+                    (top - y) / size * pixels.Height,
+                    destination.Width / size * pixels.Width,
+                    destination.Height / size * pixels.Height);
+                context.DrawImage(image, source, destination);
             }
         }
 
