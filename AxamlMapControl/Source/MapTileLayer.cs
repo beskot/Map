@@ -19,7 +19,6 @@ namespace AxamlMapControl.Source
             AvaloniaProperty.Register<MapTileLayer, ITileImageLoader>(nameof(TileImageLoader));
         public static readonly StyledProperty<ITileSource> TileSourceProperty =
             AvaloniaProperty.Register<MapTileLayer, ITileSource>(nameof(TileSource));
-
         public ITileImageLoader TileImageLoader
         {
             get => GetValue(TileImageLoaderProperty);
@@ -32,16 +31,18 @@ namespace AxamlMapControl.Source
         }
 
         public const int TileSize = 256;
+        private const int ParallelLoads = 4;
         private MapTileMatrix _currentTileMatrix = MapTileMatrix.Empty;
         private List<Tile> _tileList = new();
         private List<Tile> _fallbackTiles = new();
-        // Array keys use reference equality: repeated world copies share one bitmap.
         private readonly Dictionary<byte[], Bitmap> _images = new();
         private readonly HashSet<byte[]> _failedImages = new();
+        private readonly Dictionary<Tile, CancellationTokenSource> _requests = new();
+        private readonly HashSet<Tile> _failedRequests = new();
         private readonly LayerDrawingSurface _tileSurface;
         private AvaloniaObject? _observedSource;
-        private CancellationTokenSource? _loadCancellation;
         private long _generation;
+        private int _activeLoads;
 
         static MapTileLayer()
         {
@@ -59,11 +60,7 @@ namespace AxamlMapControl.Source
             DetachedFromVisualTree += (_, _) =>
             {
                 ObserveSource(null);
-                _generation++;
-                CancelPendingLoads();
-                _tileList = new List<Tile>();
-                _currentTileMatrix = MapTileMatrix.Empty;
-                ClearImages();
+                ClearTiles();
                 InvalidateTiles();
             };
         }
@@ -74,17 +71,22 @@ namespace AxamlMapControl.Source
             InvalidateVisual();
         }
 
-        private void CancelPendingLoads()
+        private void ClearTiles()
         {
-            var cancellation = _loadCancellation;
-            _loadCancellation = null;
-            if (cancellation is null) return;
-            try { cancellation.Cancel(); }
-            catch (AggregateException ex)
+            _generation++;
+            foreach (var cancellation in _requests.Values.ToArray())
             {
-                Trace.TraceError("Tile cancellation callback failed: {0}", ex);
+                try { cancellation.Cancel(); }
+                catch (AggregateException ex) { Trace.TraceError("Tile cancellation failed: {0}", ex); }
             }
-            // Disposed on the UI thread only after the batch finishes.
+            _requests.Clear();
+            _failedRequests.Clear();
+            _tileList.Clear();
+            _fallbackTiles.Clear();
+            _currentTileMatrix = MapTileMatrix.Empty;
+            foreach (var image in _images.Values) image.Dispose();
+            _images.Clear();
+            _failedImages.Clear();
         }
 
         private void ObserveSource(AvaloniaObject? source)
@@ -102,33 +104,19 @@ namespace AxamlMapControl.Source
 
         private void ResetTiles()
         {
-            _generation++;
-            CancelPendingLoads();
-            _tileList = new List<Tile>();
-            _currentTileMatrix = MapTileMatrix.Empty;
-            ClearImages();
+            ClearTiles();
             ObserveSource(MapParent is null ? null : TileSource as AvaloniaObject);
             InvalidateTiles();
-            if (MapParent is { } map && map.Bounds.Width > 0 && map.Bounds.Height > 0) OnViewChanged(map.ZoomLevel);
+            if (MapParent is { } map && map.Bounds.Width > 0 && map.Bounds.Height > 0)
+                OnViewChanged(map.ZoomLevel);
         }
 
-        private void ClearImages()
-        {
-            _fallbackTiles.Clear();
-            foreach (var image in _images.Values) image.Dispose();
-            _images.Clear();
-            _failedImages.Clear();
-        }
+        private bool HasImage(Tile tile) => tile.ImageData is { } data && _images.ContainsKey(data);
 
-        private bool HasImage(Tile tile) =>
-            tile.ImageData is { } data && _images.ContainsKey(data);
-
-        // Called only from UI updates, never from Render or a loader worker.
         private void SynchronizeImages()
         {
             var visible = new HashSet<byte[]>(_tileList.Concat(_fallbackTiles)
-                .Where(tile => tile.ImageData is { Length: > 0 })
-                .Select(tile => tile.ImageData!));
+                .Where(tile => tile.ImageData is { Length: > 0 }).Select(tile => tile.ImageData!));
             foreach (var data in _images.Keys.Where(data => !visible.Contains(data)).ToList())
             {
                 _images[data].Dispose();
@@ -172,9 +160,9 @@ namespace AxamlMapControl.Source
                 if (tile.ImageData is not { } data || !_images.TryGetValue(data, out var image)) continue;
                 var scale = Math.Pow(2d, _currentTileMatrix.Zoom - tile.Zoom);
                 var size = TileSize * scale;
-                var x = (tile.XIndex * scale - _currentTileMatrix.Xmin) * TileSize;
-                var y = (tile.Y * scale - _currentTileMatrix.Ymin) * TileSize;
-                context.DrawImage(image, new Rect(x, y, size, size));
+                context.DrawImage(image, new Rect(
+                    (tile.XIndex * scale - _currentTileMatrix.Xmin) * TileSize,
+                    (tile.Y * scale - _currentTileMatrix.Ymin) * TileSize, size, size));
             }
         }
 
@@ -187,94 +175,106 @@ namespace AxamlMapControl.Source
         private void UpdateView(int zoomLevel)
         {
             if (MapParent is null || !(MapParent.Bounds.Width > 0 && MapParent.Bounds.Height > 0)) return;
-            var source = TileSource;
-            var loader = TileImageLoader;
-            ObserveSource(source as AvaloniaObject);
+            ObserveSource(TileSource as AvaloniaObject);
             var matrix = MapTileMatrix.Create(zoomLevel, MapParent.Transform.GetViewBounds(), TileSize);
-            var changed = matrix != _currentTileMatrix || matrix.Length != _currentTileMatrix.Length;
-            if (changed)
+            if (matrix != _currentTileMatrix)
             {
-                _generation++;
-                CancelPendingLoads();
                 var previous = _tileList;
-                // Keep one loaded snapshot; rapid zooms must not replace it with empty tiles.
-                if (previous.Any(HasImage) &&
-                    (_fallbackTiles.Count == 0 || previous.All(HasImage)))
+                if (previous.Any(HasImage) && (_fallbackTiles.Count == 0 || previous.All(HasImage)))
                     _fallbackTiles = previous.Where(HasImage).ToList();
-                var reusable = previous.Concat(_fallbackTiles).ToList();
+                var reusable = previous.Concat(_fallbackTiles)
+                    .Where(tile => tile.ImageData is { Length: > 0 })
+                    .GroupBy(tile => tile).ToDictionary(group => group.Key, group => group.First().ImageData);
                 var next = new List<Tile>();
                 matrix.TraverseСells((zoom, x, y) =>
                 {
-                    var tileX = ViewTransform.NormalizeValue(x, matrix.NumTiles);
-                    var old = reusable.Find(tile => tile.Zoom == zoom && tile.X == tileX &&
-                        tile.Y == y && tile.XIndex == x);
-                    next.Add(new Tile(zoom, tileX, y)
-                    {
-                        XIndex = x,
-                        ImageData = old?.ImageData
-                    });
+                    var tile = new Tile(zoom, ViewTransform.NormalizeValue(x, matrix.NumTiles), y)
+                    { XIndex = x };
+                    if (reusable.TryGetValue(tile, out var data)) tile.ImageData = data;
+                    next.Add(tile);
                 });
                 _currentTileMatrix = matrix;
                 _tileList = next;
+                _failedRequests.Clear();
                 SynchronizeImages();
             }
-
             RenderTransform = new MatrixTransform(Matrix.CreateTranslation(
                 ViewTopLeft + _currentTileMatrix.Origin + PointTranslated));
             InvalidateTiles();
-            if (!changed || source is null || loader is null) return;
-            if (source is TileSource && string.IsNullOrWhiteSpace(source.UriStringFormat)) return;
-            // Workers receive separate objects; visible tile data is published on the UI thread.
-            var pending = _tileList.Where(tile => tile.ImageData is null)
-                .Select(tile => new Tile(tile.Zoom, tile.X, tile.Y) { XIndex = tile.XIndex })
-                .ToList();
-            if (pending.Count == 0) return;
-            var snapshot = new ResolvedSource(source, pending);
-            var cancellation = new CancellationTokenSource();
-            _loadCancellation = cancellation;
-            _ = LoadTilesAsync(loader, snapshot, pending, _generation, cancellation);
+            PumpLoads();
         }
 
-        private async Task LoadTilesAsync(ITileImageLoader loader, ITileSource source,
-            List<Tile> tiles, long generation, CancellationTokenSource cancellation)
+        // UI-thread scheduler: the latest viewport is the queue; in-flight work survives panning.
+        private void PumpLoads()
+        {
+            if (MapParent is null || _currentTileMatrix.IsEmpty || TileSource is null || TileImageLoader is null) return;
+            if (TileSource is TileSource && string.IsNullOrWhiteSpace(TileSource.UriStringFormat)) return;
+            var centerX = (_currentTileMatrix.Xmin + (double)_currentTileMatrix.Xmax) / 2;
+            var centerY = (_currentTileMatrix.Ymin + (double)_currentTileMatrix.Ymax) / 2;
+            var pending = _tileList.Where(tile => tile.ImageData is null &&
+                    !_requests.ContainsKey(tile) && !_failedRequests.Contains(tile))
+                .OrderBy(tile => Math.Pow(tile.XIndex + 0.5 - centerX, 2) +
+                    Math.Pow(tile.Y + 0.5 - centerY, 2))
+                .Distinct().Take(Math.Max(0, ParallelLoads - _activeLoads)).ToList();
+            foreach (var visible in pending)
+            {
+                var tile = new Tile(visible.Zoom, visible.X, visible.Y);
+                ITileSource source;
+                try { source = new ResolvedSource(TileSource, new[] { tile }); }
+                catch (Exception ex)
+                {
+                    _failedRequests.Add(tile);
+                    Trace.TraceError("Resolving tile URI failed: {0}", ex);
+                    continue;
+                }
+                var cancellation = new CancellationTokenSource();
+                _requests.Add(tile, cancellation);
+                _activeLoads++;
+                _ = LoadTileAsync(TileImageLoader, source, tile, _generation, cancellation);
+            }
+        }
+
+        private async Task LoadTileAsync(ITileImageLoader loader, ITileSource source,
+            Tile tile, long generation, CancellationTokenSource cancellation)
         {
             var token = cancellation.Token;
             try
             {
-                await loader.TileLoadAsync(tiles, source, token).ConfigureAwait(false);
-                token.ThrowIfCancellationRequested();
-                Dispatcher.UIThread.Post(() =>
-                {
-                    if (token.IsCancellationRequested || generation != _generation || MapParent is null) return;
-                    try
-                    {
-                        var loaded = new Dictionary<Tile, byte[]>();
-                        foreach (var tile in tiles)
-                            if (tile.ImageData is { Length: > 0 } data) loaded[tile] = data;
-                        foreach (var tile in _tileList)
-                            if (tile.ImageData is null && loaded.TryGetValue(tile, out var data))
-                                tile.ImageData = data;
-                        SynchronizeImages();
-                        InvalidateTiles();
-                    }
-                    catch (Exception ex)
-                    {
-                        Trace.TraceError("Publishing tile images failed: {0}", ex);
-                    }
-                });
+                // Each slot completes independently, including cache lookup and insertion.
+                await Task.Run(() => loader.TileLoadAsync(new[] { tile }, source, token), token)
+                    .ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested) { }
-            catch (Exception ex)
-            {
-                Trace.TraceError("Tile batch failed: {0}", ex);
-            }
+            catch (Exception ex) { Trace.TraceError("Tile load failed: {0}", ex); }
             finally
             {
                 Dispatcher.UIThread.Post(() =>
                 {
-                    if (ReferenceEquals(_loadCancellation, cancellation)) _loadCancellation = null;
-                    cancellation.Dispose();
-                });
+                    _activeLoads--;
+                    if (_requests.TryGetValue(tile, out var current) && ReferenceEquals(current, cancellation))
+                        _requests.Remove(tile);
+                    try
+                    {
+                        if (!token.IsCancellationRequested && generation == _generation && MapParent is not null)
+                        {
+                            if (tile.ImageData is { Length: > 0 } data)
+                            {
+                                foreach (var visible in _tileList)
+                                    if (visible.Equals(tile)) visible.ImageData = data;
+                                SynchronizeImages();
+                                InvalidateTiles();
+                            }
+                            else _failedRequests.Add(tile);
+                        }
+                    }
+                    catch (Exception ex) { Trace.TraceError("Publishing tile failed: {0}", ex); }
+                    finally
+                    {
+                        cancellation.Dispose();
+                        try { PumpLoads(); }
+                        catch (Exception ex) { Trace.TraceError("Scheduling tiles failed: {0}", ex); }
+                    }
+                }, DispatcherPriority.Normal);
             }
         }
 
