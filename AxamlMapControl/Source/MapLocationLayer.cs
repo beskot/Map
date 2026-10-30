@@ -1,9 +1,11 @@
+using System;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.VisualTree;
 using AxamlMapControl.Source.Proj;
+using AxamlMapControl.Source.Shapes;
 using Location = AxamlMapControl.Source.Proj.Location;
 
 namespace AxamlMapControl.Source
@@ -29,6 +31,7 @@ namespace AxamlMapControl.Source
 
         public MapLocationLayer()
         {
+            ClipToBounds = true;
             _boundsSurface = new LayerDrawingSurface(DrawChildrenBounds);
             // A visual-only overlay must not become an ItemsPresenter item/container.
             VisualChildren.Add(_boundsSurface);
@@ -50,7 +53,10 @@ namespace AxamlMapControl.Source
         {
             if (!ShowChildrenBounds) return;
             var pen = new Pen(Brushes.Gray, 2);
-            foreach (var child in Children) context.DrawRectangle(Brushes.Transparent, pen, child.Bounds);
+            var viewport = new Rect(Bounds.Size);
+            foreach (var child in Children)
+                if (child.Bounds.Intersects(viewport))
+                    context.DrawRectangle(Brushes.Transparent, pen, child.Bounds);
         }
 
         protected override Size MeasureOverride(Size availableSize)
@@ -75,12 +81,32 @@ namespace AxamlMapControl.Source
                     var position = map.Transform.LocationToView(location);
                     position = ElementPositionConstrain(item, position);
                     position = ElementAligment(item, position);
-                    item.Arrange(new Rect(position, item.DesiredSize));
+                    var target = new Rect(position, item.DesiredSize);
+                    if (item is MapPath shape && IsOutsideViewport(target, finalSize, shape.StrokeThickness))
+                    {
+                        // Keep cached geometry and DesiredSize, without changing user visibility/bindings.
+                        // Place beyond the clip even if minimum-size/alignment expands a zero-size slot.
+                        var outside = new Point(finalSize.Width + item.DesiredSize.Width + 64,
+                            finalSize.Height + item.DesiredSize.Height + 64);
+                        item.Arrange(new Rect(outside, new Size()));
+                        continue;
+                    }
+                    item.Arrange(target);
                 }
             }
             _boundsSurface.Arrange(new Rect(finalSize));
-            _boundsSurface.InvalidateVisual();
+            if (ShowChildrenBounds) _boundsSurface.InvalidateVisual();
             return finalSize;
+        }
+
+        private static bool IsOutsideViewport(Rect bounds, Size viewport, double strokeThickness)
+        {
+            if (!double.IsFinite(bounds.X) || !double.IsFinite(bounds.Y) ||
+                !double.IsFinite(bounds.Right) || !double.IsFinite(bounds.Bottom)) return false;
+            var margin = 32d + (double.IsFinite(strokeThickness) ? Math.Max(0, strokeThickness) * 2 : 0);
+            // Inclusive comparisons retain zero-height/width lines crossing the screen.
+            return bounds.Right < -margin || bounds.Bottom < -margin ||
+                bounds.X > viewport.Width + margin || bounds.Y > viewport.Height + margin;
         }
 
         private Point ElementAligment(Control element, Point position)
