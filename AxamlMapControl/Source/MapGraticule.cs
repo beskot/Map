@@ -91,7 +91,6 @@ namespace AxamlMapControl.Source
                 origin.X + (point.X + delta.X - center.X) * scale,
                 origin.Y + (point.Y + delta.Y - center.Y) * scale);
             var viewport = new Rect(size);
-            var offset = StrokeThickness / 2;
             var margin = Math.Max(1, Math.Abs(StrokeThickness) * 2);
             using (context.PushClip(viewport))
             {
@@ -105,27 +104,32 @@ namespace AxamlMapControl.Source
                 }
                 foreach (var crossing in _crossings)
                 {
-                    var position = ToScreen(crossing.Position);
-                    // Transform anchors only: font size and pen thickness stay in screen units.
-                    DrawLabel(context, crossing.Latitude,
-                        position - new Point(-2 - offset, FontSize + 4 + offset), viewport);
-                    DrawLabel(context, crossing.Longitude,
-                        position + new Point(2 + offset, offset), viewport);
+                    DrawLabelPair(context, crossing.Latitude, crossing.Longitude,
+                        ToScreen(crossing.Position), viewport);
                 }
             }
         }
 
-        private void DrawLabel(DrawingContext context, FormattedText text, Point position, Rect viewport)
+        private void DrawLabelPair(DrawingContext context, FormattedText latitude,
+            FormattedText longitude, Point crossing, Rect viewport)
         {
-            var bounds = new Rect(position, new Size(text.Width, text.Height));
-            if (bounds.Width <= 0 || bounds.Height <= 0 ||
-                bounds.X < viewport.X || bounds.Y < viewport.Y ||
+            if (latitude.Width <= 0 || latitude.Height <= 0 ||
+                longitude.Width <= 0 || longitude.Height <= 0) return;
+            var offset = Math.Max(MinimumLabelGap / 2, Math.Abs(StrokeThickness) / 2 + 2);
+            var latitudePosition = new Point(crossing.X + offset,
+                crossing.Y - offset - latitude.Height);
+            var longitudePosition = new Point(crossing.X + offset, crossing.Y + offset);
+            // Reserve both labels together; one coordinate must never suppress its partner.
+            var bounds = new Rect(latitudePosition, new Size(
+                Math.Max(latitude.Width, longitude.Width), latitude.Height + 2 * offset + longitude.Height));
+            if (bounds.X < viewport.X || bounds.Y < viewport.Y ||
                 bounds.Right > viewport.Right || bounds.Bottom > viewport.Bottom) return;
             var clearance = new Rect(bounds.X - MinimumLabelGap, bounds.Y - MinimumLabelGap,
                 bounds.Width + 2 * MinimumLabelGap, bounds.Height + 2 * MinimumLabelGap);
             foreach (var occupied in _visibleLabelBounds)
                 if (clearance.Intersects(occupied)) return;
-            context.DrawText(text, position);
+            context.DrawText(latitude, latitudePosition);
+            context.DrawText(longitude, longitudePosition);
             _visibleLabelBounds.Add(bounds);
         }
 
