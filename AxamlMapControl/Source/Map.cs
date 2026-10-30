@@ -87,6 +87,8 @@ namespace AxamlMapControl.Source
         internal bool SuppressGraticuleRendering => _capturingZoomSnapshot || _zoomSnapshot is not null;
         private Size _snapshotSize;
         private Point _animationFocus;
+        private Point _animationStartOrigin;
+        private Point _visualOrigin;
         private double _animationStartZoom;
         private double _animationTargetZoom;
         private double _visualZoom;
@@ -190,6 +192,7 @@ namespace AxamlMapControl.Source
             if (target == ZoomLevel) return;
             var focus = e.GetPosition(this);
             var startZoom = _zoomSnapshot is null ? ZoomLevel : _visualZoom;
+            var startOrigin = _zoomSnapshot is null ? Transform.ViewCenter : _visualOrigin;
             RenderTargetBitmap? snapshot = null;
             if (IsZoomAnimationEnabled && ZoomAnimationDuration > TimeSpan.Zero && _hasView &&
                 Bounds.Width > 0 && Bounds.Height > 0)
@@ -201,7 +204,7 @@ namespace AxamlMapControl.Source
                         Math.Max(1, checked((int)Math.Ceiling(Bounds.Width * scaling))),
                         Math.Max(1, checked((int)Math.Ceiling(Bounds.Height * scaling)))),
                         new Vector(96 * scaling, 96 * scaling));
-                    // Exclude grid lines and text from the scaled raster snapshot.
+                    // Capture tiles and shapes, but never rasterize the vector graticule.
                     _capturingZoomSnapshot = true;
                     try { snapshot.Render(this); }
                     finally { _capturingZoomSnapshot = false; }
@@ -219,6 +222,15 @@ namespace AxamlMapControl.Source
             {
                 // Start target-level tile requests immediately, not at animation completion.
                 SetCurrentValue(ZoomLevelProperty, target);
+                if (snapshot is not null)
+                {
+                    // Anchor to the visible frame, not the previous logical target.
+                    var targetScale = Math.Pow(2, ZoomLevel - startZoom);
+                    var targetOrigin = new Point(
+                        focus.X + (startOrigin.X - focus.X) * targetScale,
+                        focus.Y + (startOrigin.Y - focus.Y) * targetScale);
+                    Transform.Translate(targetOrigin - Transform.ViewCenter);
+                }
             }
             catch
             {
@@ -231,6 +243,8 @@ namespace AxamlMapControl.Source
                 _zoomSnapshot = snapshot;
                 _snapshotSize = Bounds.Size;
                 _animationFocus = focus;
+                _animationStartOrigin = startOrigin;
+                _visualOrigin = startOrigin;
                 _animationStartZoom = startZoom;
                 _animationTargetZoom = ZoomLevel;
                 _visualZoom = startZoom;
@@ -261,6 +275,9 @@ namespace AxamlMapControl.Source
             var eased = 1 - Math.Pow(1 - progress, 3);
             _visualZoom = _animationStartZoom + (_animationTargetZoom - _animationStartZoom) * eased;
             _snapshotScale = Math.Pow(2, _visualZoom - _animationStartZoom);
+            _visualOrigin = new Point(
+                _animationFocus.X + (_animationStartOrigin.X - _animationFocus.X) * _snapshotScale,
+                _animationFocus.Y + (_animationStartOrigin.Y - _animationFocus.Y) * _snapshotScale);
             _zoomSurface.InvalidateVisual();
         }
 
@@ -271,6 +288,7 @@ namespace AxamlMapControl.Source
             var snapshot = _zoomSnapshot;
             _zoomSnapshot = null;
             _visualZoom = ZoomLevel;
+            _visualOrigin = Transform.ViewCenter;
             snapshot?.Dispose();
             if (snapshot is not null) InvalidateGraticules();
             _zoomSurface?.InvalidateVisual();
@@ -279,7 +297,8 @@ namespace AxamlMapControl.Source
         private void InvalidateGraticules()
         {
             foreach (var visual in this.GetVisualDescendants())
-                if (visual is MapGraticule graticule) graticule.InvalidateVisual();
+                if (visual is MapGraticule graticule && ReferenceEquals(graticule.MapParent, this))
+                    graticule.InvalidateVisual();
         }
 
         private void DrawZoomAnimation(DrawingContext context)
@@ -288,7 +307,24 @@ namespace AxamlMapControl.Source
             var scale = _snapshotScale;
             var destination = new Rect(_animationFocus.X * (1 - scale),
                 _animationFocus.Y * (1 - scale), _snapshotSize.Width * scale, _snapshotSize.Height * scale);
-            using (context.PushClip(LocalViewBounds)) context.DrawImage(snapshot, destination);
+            using (context.PushClip(LocalViewBounds))
+            {
+                context.DrawImage(snapshot, destination);
+                if (_capturingZoomSnapshot) return;
+                var vectorScale = Math.Pow(2, _visualZoom - _animationTargetZoom);
+                foreach (var visual in this.GetVisualDescendants())
+                {
+                    if (visual is not MapGraticule graticule ||
+                        !ReferenceEquals(graticule.MapParent, this) || !graticule.IsEffectivelyVisible) continue;
+                    var opacity = 1d;
+                    for (Visual? ancestor = graticule; ancestor is not null && ancestor != this;
+                         ancestor = ancestor.GetVisualParent())
+                        opacity *= ancestor.Opacity;
+                    if (opacity <= 0) continue;
+                    using (context.PushOpacity(opacity))
+                        graticule.RenderAnimated(context, vectorScale, _visualOrigin);
+                }
+            }
         }
 
         private sealed class ZoomAnimationSurface : Control

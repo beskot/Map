@@ -52,37 +52,57 @@ namespace AxamlMapControl.Source
         {
             if (MapParent is { SuppressGraticuleRendering: true }) return;
             base.Render(context);
+            if (MapParent is not { } map) return;
+            RenderCore(context, 1, map.Transform.ViewCenter);
+        }
+
+        internal void RenderAnimated(DrawingContext context, double scale, Point origin)
+        {
+            if (!double.IsFinite(scale) || scale <= 0) return;
+            RenderCore(context, scale, origin);
+        }
+
+        private void RenderCore(DrawingContext context, double scale, Point origin)
+        {
             if (MapParent is not { } map || !(map.Bounds.Width > 0 && map.Bounds.Height > 0)) return;
             var transform = Transform;
             var size = map.Bounds.Size;
-            var distance = CalculateLineDistance(150);
             var center = transform.ViewCenter;
+            var distance = CalculateLineDistance(150 / scale);
+            // Invert the animated screen mapping to cache all visible target-level geometry.
+            var required = new Rect(center.X - origin.X / scale, center.Y - origin.Y / scale,
+                size.Width / scale, size.Height / scale);
             var delta = new Vector(center.X - _cachedCenter.X, center.Y - _cachedCenter.Y);
             if (!_cacheValid || !ReferenceEquals(transform, _cachedTransform) ||
                 !_cachedScale.Equals(transform.Scale) || !_cachedDistance.Equals(distance) ||
                 !_cachedSize.Equals(size) ||
-                _cachedArea.X + delta.X > 0 || _cachedArea.Y + delta.Y > 0 ||
-                _cachedArea.Right + delta.X < size.Width || _cachedArea.Bottom + delta.Y < size.Height)
+                _cachedArea.X + delta.X > required.X || _cachedArea.Y + delta.Y > required.Y ||
+                _cachedArea.Right + delta.X < required.Right ||
+                _cachedArea.Bottom + delta.Y < required.Bottom)
             {
-                RebuildCache(transform, size, distance);
+                RebuildCache(transform, size, distance, required, Math.Max(CachePadding, CachePadding / scale));
                 delta = new Vector();
             }
+            Point ToScreen(Point point) => new Point(
+                origin.X + (point.X + delta.X - center.X) * scale,
+                origin.Y + (point.Y + delta.Y - center.Y) * scale);
             var viewport = new Rect(size);
             var offset = StrokeThickness / 2;
+            var margin = Math.Max(1, Math.Abs(StrokeThickness) * 2);
             using (context.PushClip(viewport))
             {
                 foreach (var line in _lines)
                 {
-                    var start = line.Start + delta;
-                    var end = line.End + delta;
-                    var margin = Math.Max(1, Math.Abs(StrokeThickness) * 2);
+                    var start = ToScreen(line.Start);
+                    var end = ToScreen(line.End);
                     if (Math.Max(start.X, end.X) < -margin || Math.Min(start.X, end.X) > size.Width + margin ||
                         Math.Max(start.Y, end.Y) < -margin || Math.Min(start.Y, end.Y) > size.Height + margin) continue;
                     context.DrawLine(Pen, start, end);
                 }
                 foreach (var crossing in _crossings)
                 {
-                    var position = crossing.Position + delta;
+                    var position = ToScreen(crossing.Position);
+                    // Transform anchors only: font size and pen thickness stay in screen units.
                     DrawLabel(context, crossing.Latitude,
                         position - new Point(-2 - offset, FontSize + 4 + offset), viewport);
                     DrawLabel(context, crossing.Longitude,
@@ -97,13 +117,13 @@ namespace AxamlMapControl.Source
             if (bounds.Intersects(viewport)) context.DrawText(text, position);
         }
 
-        private void RebuildCache(ViewTransform transform, Size size, double distance)
+        private void RebuildCache(ViewTransform transform, Size size, double distance, Rect required, double padding)
         {
             _cacheValid = false;
             _lines.Clear();
             _crossings.Clear();
-            _cachedArea = new Rect(-CachePadding, -CachePadding,
-                size.Width + 2 * CachePadding, size.Height + 2 * CachePadding);
+            _cachedArea = new Rect(required.X - padding, required.Y - padding,
+                required.Width + 2 * padding, required.Height + 2 * padding);
             transform.GetMapBoundingBox(_cachedArea)?.VisitingRoundByDistance(distance,
                 (start, end) => _lines.Add((transform.LocationToView(start), transform.LocationToView(end))),
                 location => _crossings.Add((transform.LocationToView(location),
