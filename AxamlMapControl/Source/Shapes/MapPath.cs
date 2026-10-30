@@ -88,7 +88,11 @@ namespace AxamlMapControl.Source.Shapes
                 data = new PathGeometry();
                 Data = data;
             }
-            data.Figures.Clear();
+            // Geometry observers do not support collection Reset notifications.
+            while (data.Figures.Count > 0)
+            {
+                data.Figures.RemoveAt(data.Figures.Count - 1);
+            }
             if (values.Length < minimumPoints || values.Any(location => location is null ||
                 !double.IsFinite(location.Latitude) || !double.IsFinite(location.Longitude)))
             {
