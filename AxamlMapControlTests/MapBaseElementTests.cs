@@ -46,7 +46,7 @@ namespace AxamlMapControlTests
         public void DashOffsetAndCollectionMutationsRebuildPen()
         {
             var dashes = new AvaloniaList<double> { 2, 3 };
-            var element = new TestElement { Stroke = Brushes.Black, StrokeDashArray = dashes };
+            var element = new TestShapeElement { Stroke = Brushes.Black, StrokeDashArray = dashes };
             element.SetMapParent(new Map());
             var initial = element.CurrentPen;
             element.StrokeDashOffset = 4;
@@ -70,11 +70,50 @@ namespace AxamlMapControlTests
             element.SetMapParent(null);
         }
 
+        [AvaloniaFact]
+        public void ShapePenIsInitializedBeforeAttachment()
+        {
+            var element = new TestShapeElement();
+            Assert.NotNull(element.CurrentPen);
+            element.Stroke = Brushes.Red;
+            element.StrokeThickness = 3;
+            Assert.Same(Brushes.Red, element.CurrentPen.Brush);
+            Assert.Equal(3d, element.CurrentPen.Thickness);
+        }
+
+        [AvaloniaFact]
+        public void TextAndShapeResponsibilitiesAreSeparate()
+        {
+            Assert.Null(typeof(MapBaseElement).GetProperty("Stroke"));
+            Assert.Null(typeof(MapBaseElement).GetProperty("FontSize"));
+            Assert.Null(typeof(MapShapeElement).GetProperty("FontSize"));
+            Assert.Null(typeof(MapTextElement).GetProperty("Stroke"));
+            var text = new TestTextElement { FontSize = 18, Foreground = Brushes.Blue };
+            var graticule = new MapGraticule { FontSize = 20, Foreground = Brushes.Red, Stroke = Brushes.Black };
+            Assert.Equal(18d, text.FontSize);
+            Assert.Equal(20d, graticule.FontSize);
+            Assert.Equal(12d, new MapGraticule().FontSize);
+            Assert.Same(Brushes.Red, graticule.Foreground);
+            Assert.Same(Brushes.Black, graticule.Stroke);
+            graticule.SetValue(MapGraticule.FontSizeProperty, 22d);
+            Assert.Equal(22d, graticule.FontSize);
+        }
+
         private sealed class TestElement : MapBaseElement
         {
             public int Updates { get; private set; }
-            public IPen CurrentPen => Pen;
             protected override void OnViewChanged(int zoomLevel) => Updates++;
+        }
+
+        private sealed class TestShapeElement : MapShapeElement
+        {
+            public IPen CurrentPen => Pen;
+            protected override void OnViewChanged(int zoomLevel) { }
+        }
+
+        private sealed class TestTextElement : MapTextElement
+        {
+            protected override void OnViewChanged(int zoomLevel) { }
         }
     }
 }

@@ -7,8 +7,20 @@ using AxamlMapControl.Source.Proj;
 
 namespace AxamlMapControl.Source
 {
-    public class MapGraticule : MapBaseElement
+    public class MapGraticule : MapShapeElement
     {
+        public static readonly StyledProperty<FontFamily> FontFamilyProperty = MapTextElement.FontFamilyProperty.AddOwner<MapGraticule>();
+        public static readonly StyledProperty<double> FontSizeProperty = MapTextElement.FontSizeProperty.AddOwner<MapGraticule>();
+        public static readonly StyledProperty<FontStyle> FontStyleProperty = MapTextElement.FontStyleProperty.AddOwner<MapGraticule>();
+        public static readonly StyledProperty<FontWeight> FontWeightProperty = MapTextElement.FontWeightProperty.AddOwner<MapGraticule>();
+        public static readonly StyledProperty<IBrush> ForegroundProperty = MapTextElement.ForegroundProperty.AddOwner<MapGraticule>();
+
+        public FontFamily FontFamily { get => GetValue(FontFamilyProperty); set => SetValue(FontFamilyProperty, value); }
+        public double FontSize { get => GetValue(FontSizeProperty); set => SetValue(FontSizeProperty, value); }
+        public FontStyle FontStyle { get => GetValue(FontStyleProperty); set => SetValue(FontStyleProperty, value); }
+        public FontWeight FontWeight { get => GetValue(FontWeightProperty); set => SetValue(FontWeightProperty, value); }
+        public IBrush Foreground { get => GetValue(ForegroundProperty); set => SetValue(ForegroundProperty, value); }
+
         private const int MaximumCachedLabels = 512;
         private const double CachePadding = 256;
         private const double MinimumLabelGap = 4;
