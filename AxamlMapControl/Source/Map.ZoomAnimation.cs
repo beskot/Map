@@ -5,122 +5,80 @@ using Avalonia.Controls;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Threading;
-using Avalonia.VisualTree;
 
 namespace AxamlMapControl.Source
 {
-    public partial class Map
+    internal interface IMapZoomAnimationHost
     {
-        public static readonly StyledProperty<bool> IsZoomAnimationEnabledProperty =
-            AvaloniaProperty.Register<Map, bool>(nameof(IsZoomAnimationEnabled), false);
-        public static readonly StyledProperty<TimeSpan> ZoomAnimationDurationProperty =
-            AvaloniaProperty.Register<Map, TimeSpan>(nameof(ZoomAnimationDuration),
-                TimeSpan.FromMilliseconds(200), coerce: (_, value) =>
-                    value < TimeSpan.Zero ? TimeSpan.Zero :
-                    value > TimeSpan.FromSeconds(2) ? TimeSpan.FromSeconds(2) : value);
+        int ZoomLevel { get; }
+        Rect ViewBounds { get; }
+        Point ViewCenter { get; }
+        bool HasView { get; }
+        RenderTargetBitmap CaptureSnapshot();
+        void ApplyZoom(int target, Point focus);
+        void AlignViewOrigin(Point origin);
+        Point ConstrainOrigin(Point origin, double zoom);
+        void InvalidateLayers();
+        void DrawOverlays(DrawingContext context, double scale, Point origin);
+    }
 
-        public bool IsZoomAnimationEnabled
-        {
-            get => GetValue(IsZoomAnimationEnabledProperty);
-            set => SetValue(IsZoomAnimationEnabledProperty, value);
-        }
-        public TimeSpan ZoomAnimationDuration
-        {
-            get => GetValue(ZoomAnimationDurationProperty);
-            set => SetValue(ZoomAnimationDurationProperty, value);
-        }
-
-        private readonly ZoomAnimationSurface _zoomSurface;
-        private readonly DispatcherTimer _zoomTimer;
-        private readonly Stopwatch _zoomClock = new();
-        private RenderTargetBitmap? _zoomSnapshot;
-        private bool _capturingZoomSnapshot;
+    /// <summary>Owns animation resources and state; has no dependency on the Map class.</summary>
+    internal sealed class MapZoomAnimator : IDisposable
+    {
+        private readonly IMapZoomAnimationHost _host;
+        private readonly DispatcherTimer _timer;
+        private readonly Stopwatch _clock = new();
+        private RenderTargetBitmap? _snapshot;
+        private bool _capturing;
         private bool _captureWithoutTiles;
         private bool _animateNewTiles;
-        internal bool SuppressGraticuleRendering => _capturingZoomSnapshot || _zoomSnapshot is not null;
-        internal bool SuppressTileCapture => _capturingZoomSnapshot && _captureWithoutTiles;
+        private bool _disposed;
         private Size _snapshotSize;
-        private Point _animationFocus;
-        private Point _animationStartOrigin;
-        private Point _snapshotBaseOrigin;
+        private Point _focus;
+        private Point _startOrigin;
+        private Point _snapshotOrigin;
         private Point _visualOrigin;
-        private double _animationStartZoom;
-        private double _snapshotBaseZoom;
-        private double _animationTargetZoom;
+        private double _startZoom;
+        private double _snapshotZoom;
+        private double _targetZoom;
         private double _visualZoom;
         private double _snapshotScale = 1;
-        private TimeSpan _animationDuration;
+        private TimeSpan _duration;
 
-        private static void ConfigureZoomAnimationProperties()
+        public Control Surface { get; }
+        public bool SuppressGraticuleRendering => _capturing || _snapshot is not null;
+        public bool SuppressTileCapture => _capturing && _captureWithoutTiles;
+
+        public MapZoomAnimator(IMapZoomAnimationHost host)
         {
-            IsZoomAnimationEnabledProperty.Changed.AddClassHandler<Map>((map, _) =>
+            _host = host;
+            Surface = new AnimationSurface(this)
             {
-                if (!map.IsZoomAnimationEnabled) map.StopZoomAnimation();
-            });
-            ZoomAnimationDurationProperty.Changed.AddClassHandler<Map>((map, _) =>
-            {
-                if (map.ZoomAnimationDuration <= TimeSpan.Zero) map.StopZoomAnimation();
-            });
+                IsHitTestVisible = false, ClipToBounds = true, ZIndex = int.MaxValue
+            };
+            _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
+            _timer.Tick += OnTick;
         }
 
-        private ZoomAnimationSurface CreateZoomAnimationSurface() => new ZoomAnimationSurface(this)
+        public void ZoomTo(int target, Point focus, bool enabled, TimeSpan duration)
         {
-            IsHitTestVisible = false,
-            ClipToBounds = true,
-            ZIndex = int.MaxValue
-        };
-
-        private DispatcherTimer CreateZoomAnimationTimer() =>
-            new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
-
-        private void InitializeZoomAnimation()
-        {
-            VisualChildren.Add(_zoomSurface);
-            _zoomTimer.Tick += (_, _) => AdvanceZoomAnimation();
-            DetachedFromVisualTree += (_, _) => StopZoomAnimation();
-        }
-
-        protected override Size MeasureOverride(Size availableSize)
-        {
-            var result = base.MeasureOverride(availableSize);
-            _zoomSurface.Measure(availableSize);
-            return result;
-        }
-
-        protected override Size ArrangeOverride(Size finalSize)
-        {
-            var result = base.ArrangeOverride(finalSize);
-            _zoomSurface.Arrange(new Rect(finalSize));
-            return result;
-        }
-
-        private void ZoomAt(int target, Point focus)
-        {
-            var startZoom = _zoomSnapshot is null ? ZoomLevel : _visualZoom;
-            var startOrigin = _zoomSnapshot is null ? Transform.ViewCenter : _visualOrigin;
-            var zoomingOut = target < ZoomLevel;
-            // On zoom out capture live overlays at their logical level, without any old tile composite.
-            var snapshotBaseZoom = zoomingOut ? ZoomLevel : startZoom;
-            var snapshotBaseOrigin = zoomingOut ? Transform.ViewCenter : startOrigin;
+            if (_disposed) throw new ObjectDisposedException(nameof(MapZoomAnimator));
+            if (target == _host.ZoomLevel) return;
+            var startZoom = _snapshot is null ? _host.ZoomLevel : _visualZoom;
+            var startOrigin = _snapshot is null ? _host.ViewCenter : _visualOrigin;
+            var zoomingOut = target < _host.ZoomLevel;
+            var snapshotZoom = zoomingOut ? _host.ZoomLevel : startZoom;
+            var snapshotOrigin = zoomingOut ? _host.ViewCenter : startOrigin;
             RenderTargetBitmap? snapshot = null;
-            if (IsZoomAnimationEnabled && ZoomAnimationDuration > TimeSpan.Zero && _hasView &&
-                Bounds.Width > 0 && Bounds.Height > 0)
+            if (enabled && duration > TimeSpan.Zero && _host.HasView &&
+                _host.ViewBounds.Width > 0 && _host.ViewBounds.Height > 0)
             {
                 try
                 {
-                    var scaling = TopLevel.GetTopLevel(this)?.RenderScaling ?? 1;
-                    snapshot = new RenderTargetBitmap(new PixelSize(
-                        Math.Max(1, checked((int)Math.Ceiling(Bounds.Width * scaling))),
-                        Math.Max(1, checked((int)Math.Ceiling(Bounds.Height * scaling)))),
-                        new Vector(96 * scaling, 96 * scaling));
                     _captureWithoutTiles = zoomingOut;
-                    _capturingZoomSnapshot = true;
-                    try { snapshot.Render(this); }
-                    finally
-                    {
-                        _capturingZoomSnapshot = false;
-                        _captureWithoutTiles = false;
-                    }
+                    _capturing = true;
+                    try { snapshot = _host.CaptureSnapshot(); }
+                    finally { _capturing = false; _captureWithoutTiles = false; }
                 }
                 catch (Exception ex)
                 {
@@ -129,139 +87,100 @@ namespace AxamlMapControl.Source
                     Trace.TraceWarning("Animated zoom snapshot failed: {0}", ex);
                 }
             }
-            StopZoomAnimation();
-            _zoomFocus = focus;
+            Stop();
             try
             {
-                SetCurrentValue(ZoomLevelProperty, target);
+                _host.ApplyZoom(target, focus);
                 if (snapshot is not null)
                 {
-                    var targetScale = Math.Pow(2, ZoomLevel - startZoom);
-                    var targetOrigin = new Point(
+                    var targetScale = Math.Pow(2, _host.ZoomLevel - startZoom);
+                    _host.AlignViewOrigin(new Point(
                         focus.X + (startOrigin.X - focus.X) * targetScale,
-                        focus.Y + (startOrigin.Y - focus.Y) * targetScale);
-                    Transform.Translate(targetOrigin - Transform.ViewCenter);
+                        focus.Y + (startOrigin.Y - focus.Y) * targetScale));
                 }
             }
-            catch
-            {
-                snapshot?.Dispose();
-                throw;
-            }
-            finally { _zoomFocus = null; }
-            if (snapshot is not null)
-            {
-                _zoomSnapshot = snapshot;
-                _animateNewTiles = zoomingOut;
-                _snapshotSize = Bounds.Size;
-                _animationFocus = focus;
-                _animationStartOrigin = startOrigin;
-                _snapshotBaseOrigin = snapshotBaseOrigin;
-                _snapshotBaseZoom = snapshotBaseZoom;
-                _visualOrigin = startOrigin;
-                _animationStartZoom = startZoom;
-                _animationTargetZoom = ZoomLevel;
-                _visualZoom = startZoom;
-                _snapshotScale = Math.Pow(2, startZoom - snapshotBaseZoom);
-                _animationDuration = ZoomAnimationDuration;
-                _zoomClock.Restart();
-                _zoomTimer.Start();
-                InvalidateAnimatedLayers();
-                _zoomSurface.InvalidateVisual();
-            }
+            catch { snapshot?.Dispose(); throw; }
+            if (snapshot is null) return;
+            _snapshot = snapshot;
+            _animateNewTiles = zoomingOut;
+            _snapshotSize = _host.ViewBounds.Size;
+            _focus = focus;
+            _startOrigin = startOrigin;
+            _snapshotOrigin = snapshotOrigin;
+            _snapshotZoom = snapshotZoom;
+            _visualOrigin = startOrigin;
+            _startZoom = startZoom;
+            _targetZoom = _host.ZoomLevel;
+            _visualZoom = startZoom;
+            _snapshotScale = Math.Pow(2, startZoom - snapshotZoom);
+            _duration = duration;
+            _clock.Restart();
+            _timer.Start();
+            _host.InvalidateLayers();
+            Surface.InvalidateVisual();
         }
 
-        internal bool TryGetTileAnimation(out double scale, out Point origin)
+        public bool TryGetTileAnimation(out double scale, out Point origin)
         {
-            scale = Math.Pow(2, _visualZoom - _animationTargetZoom);
+            scale = Math.Pow(2, _visualZoom - _targetZoom);
             origin = _visualOrigin;
-            return _zoomSnapshot is not null && _animateNewTiles;
+            return _snapshot is not null && _animateNewTiles;
         }
-
-        private void AdvanceZoomAnimation()
+        private void OnTick(object? sender, EventArgs e) => Advance();
+        private void Advance()
         {
-            if (_zoomSnapshot is null || !IsZoomAnimationEnabled || _animationDuration <= TimeSpan.Zero)
-            {
-                StopZoomAnimation();
-                return;
-            }
-            var progress = Math.Clamp(_zoomClock.Elapsed.TotalMilliseconds /
-                _animationDuration.TotalMilliseconds, 0, 1);
-            if (progress >= 1)
-            {
-                StopZoomAnimation();
-                return;
-            }
+            if (_snapshot is null || _duration <= TimeSpan.Zero) { Stop(); return; }
+            var progress = Math.Clamp(_clock.Elapsed.TotalMilliseconds / _duration.TotalMilliseconds, 0, 1);
+            if (progress >= 1) { Stop(); return; }
             var eased = 1 - Math.Pow(1 - progress, 3);
-            _visualZoom = _animationStartZoom + (_animationTargetZoom - _animationStartZoom) * eased;
-            var visualScale = Math.Pow(2, _visualZoom - _animationStartZoom);
-            _snapshotScale = Math.Pow(2, _visualZoom - _snapshotBaseZoom);
-            _visualOrigin = new Point(
-                _animationFocus.X + (_animationStartOrigin.X - _animationFocus.X) * visualScale,
-                _animationFocus.Y + (_animationStartOrigin.Y - _animationFocus.Y) * visualScale);
-            _visualOrigin = Transform.ConstrainVerticalOrigin(_visualOrigin,
-                Transform.GetScale(0) / Math.Pow(2, _visualZoom), LocalViewBounds);
-            if (_animateNewTiles) InvalidateAnimatedLayers();
-            _zoomSurface.InvalidateVisual();
+            _visualZoom = _startZoom + (_targetZoom - _startZoom) * eased;
+            var scale = Math.Pow(2, _visualZoom - _startZoom);
+            _snapshotScale = Math.Pow(2, _visualZoom - _snapshotZoom);
+            _visualOrigin = _host.ConstrainOrigin(new Point(
+                _focus.X + (_startOrigin.X - _focus.X) * scale,
+                _focus.Y + (_startOrigin.Y - _focus.Y) * scale), _visualZoom);
+            if (_animateNewTiles) _host.InvalidateLayers();
+            Surface.InvalidateVisual();
         }
-
-        private void StopZoomAnimation()
+        public void Stop()
         {
-            _zoomTimer?.Stop();
-            _zoomClock.Stop();
-            var snapshot = _zoomSnapshot;
-            _zoomSnapshot = null;
+            _timer.Stop();
+            _clock.Stop();
+            var snapshot = _snapshot;
+            _snapshot = null;
             _animateNewTiles = false;
-            _visualZoom = ZoomLevel;
-            _visualOrigin = Transform.ViewCenter;
+            _visualZoom = _host.ZoomLevel;
+            _visualOrigin = _host.ViewCenter;
             snapshot?.Dispose();
-            if (snapshot is not null) InvalidateAnimatedLayers();
-            _zoomSurface?.InvalidateVisual();
+            if (snapshot is not null) _host.InvalidateLayers();
+            Surface.InvalidateVisual();
         }
-
-        private void InvalidateAnimatedLayers()
+        private void Draw(DrawingContext context)
         {
-            foreach (var visual in this.GetVisualDescendants())
-            {
-                if (visual is MapGraticule graticule && ReferenceEquals(graticule.MapParent, this))
-                    graticule.InvalidateVisual();
-                else if (visual is MapTileLayer layer && ReferenceEquals(layer.MapParent, this))
-                    layer.InvalidateZoomAnimation();
-            }
-        }
-
-        private void DrawZoomAnimation(DrawingContext context)
-        {
-            if (_zoomSnapshot is not { } snapshot || SuppressTileCapture) return;
-            var scale = _snapshotScale;
-            var destination = new Rect(_visualOrigin.X - _snapshotBaseOrigin.X * scale,
-                _visualOrigin.Y - _snapshotBaseOrigin.Y * scale,
-                _snapshotSize.Width * scale, _snapshotSize.Height * scale);
-            using (context.PushClip(LocalViewBounds))
+            if (_snapshot is not { } snapshot || SuppressTileCapture) return;
+            var destination = new Rect(
+                _visualOrigin.X - _snapshotOrigin.X * _snapshotScale,
+                _visualOrigin.Y - _snapshotOrigin.Y * _snapshotScale,
+                _snapshotSize.Width * _snapshotScale, _snapshotSize.Height * _snapshotScale);
+            using (context.PushClip(_host.ViewBounds))
             {
                 context.DrawImage(snapshot, destination);
-                if (_capturingZoomSnapshot) return;
-                var vectorScale = Math.Pow(2, _visualZoom - _animationTargetZoom);
-                foreach (var visual in this.GetVisualDescendants())
-                {
-                    if (visual is not MapGraticule graticule ||
-                        !ReferenceEquals(graticule.MapParent, this) || !graticule.IsEffectivelyVisible) continue;
-                    var opacity = 1d;
-                    for (Visual? ancestor = graticule; ancestor is not null && ancestor != this;
-                         ancestor = ancestor.GetVisualParent())
-                        opacity *= ancestor.Opacity;
-                    if (opacity <= 0) continue;
-                    using (context.PushOpacity(opacity))
-                        graticule.RenderAnimated(context, vectorScale, _visualOrigin);
-                }
+                if (!_capturing)
+                    _host.DrawOverlays(context, Math.Pow(2, _visualZoom - _targetZoom), _visualOrigin);
             }
         }
-
-        private sealed class ZoomAnimationSurface : Control
+        public void Dispose()
         {
-            private readonly Map _owner;
-            public ZoomAnimationSurface(Map owner) => _owner = owner;
-            public override void Render(DrawingContext context) => _owner.DrawZoomAnimation(context);
+            if (_disposed) return;
+            _disposed = true;
+            _timer.Tick -= OnTick;
+            Stop();
+        }
+        private sealed class AnimationSurface : Control
+        {
+            private readonly MapZoomAnimator _owner;
+            public AnimationSurface(MapZoomAnimator owner) => _owner = owner;
+            public override void Render(DrawingContext context) => _owner.Draw(context);
         }
     }
 }
